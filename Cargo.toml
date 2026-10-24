@@ -1,0 +1,23 @@
+[package]
+name = "rea-fast"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+oxc_parser = "0.72"
+oxc_allocator = "0.72"
+oxc_ast = "0.72"
+oxc_span = "0.72"
+rayon = "1.10"
+ignore = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+oxc_semantic = "0.72"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
