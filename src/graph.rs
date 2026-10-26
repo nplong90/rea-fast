@@ -1,4 +1,4 @@
-use crate::analyze::{FileAnalysis, Location, digest};
+use crate::analyze::{FileAnalysis, Location};
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -13,7 +13,7 @@ pub struct Dependency<'a> {
     pub resolution: &'static str,
     pub location: &'a Location,
     #[serde(skip)]
-    target_index: Option<usize>,
+    pub target_index: Option<usize>,
 }
 
 fn normalize(path: &Path) -> Option<PathBuf> {
@@ -73,8 +73,35 @@ pub fn dependencies(files: &[FileAnalysis]) -> Vec<Vec<Dependency<'_>>> {
 fn coverage(status: &str, limit: u64) -> Value {
     json!({"status":status,"truncated":false,"omitted_count":if status == "complete" { Some(0) } else { None },"limits":[{"name":"max-file-bytes","value":limit,"unit":"bytes"}]})
 }
+fn canonical_json<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
+    match value {
+        Value::Object(object) => {
+            writer.write_all(b"{")?;
+            let mut keys: Vec<_> = object.keys().collect();
+            keys.sort_unstable_by(|left, right| left.encode_utf16().cmp(right.encode_utf16()));
+            for (index, key) in keys.into_iter().enumerate() {
+                if index > 0 { writer.write_all(b",")?; }
+                serde_json::to_writer(&mut *writer, key)?;
+                writer.write_all(b":")?;
+                canonical_json(writer, &object[key])?;
+            }
+            writer.write_all(b"}")
+        }
+        Value::Array(items) => {
+            writer.write_all(b"[")?;
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 { writer.write_all(b",")?; }
+                canonical_json(writer, item)?;
+            }
+            writer.write_all(b"]")
+        }
+        _ => serde_json::to_writer(writer, value).map_err(io::Error::other),
+    }
+}
 fn semantic_id(prefix: &str, value: &Value) -> String {
-    format!("{prefix}_{}", digest(&serde_json::to_vec(value).expect("JSON values serialize")))
+    let mut hash = HashWriter(Sha256::new());
+    canonical_json(&mut hash, value).expect("JSON values serialize");
+    format!("{prefix}_{:x}", hash.0.finalize())
 }
 fn evidence(file: &FileAnalysis, location: Option<&Location>, inferred: bool, limit: u64) -> Value {
     let unavailable = file.sha256.is_none();
@@ -98,10 +125,8 @@ fn evidence(file: &FileAnalysis, location: Option<&Location>, inferred: bool, li
     })
 }
 fn identity(file: &FileAnalysis) -> Value {
-    match &file.sha256 {
-        Some(sha) => json!({"strategy":"canonical-path","stability":"artifact-version","artifact_sha256":sha,"path":file.path}),
-        None => json!({"strategy":"observation-fingerprint","stability":"observation-only","observation_sha256":digest(file.path.as_bytes()),"scope":"unavailable-source"}),
-    }
+    let sha = file.sha256.as_ref().expect("Unavailable files are excluded from the graph");
+    json!({"strategy":"canonical-path","stability":"artifact-version","artifact_sha256":sha,"path":file.path})
 }
 
 struct Graph<'a> {
@@ -199,4 +224,45 @@ pub fn write_graph<W: Write>(writer: &mut W, files: &[FileAnalysis], dependencie
     }
     serde_json::to_writer(WithoutOpening { writer, first:true }, &content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyze::analyze_source;
+
+    #[test]
+    fn resolves_modules_and_commits_stable_graph() {
+        let files = [
+            analyze_source("import type { T } from './dep.js';\r\nexport { T };\r\nexport default async (x) => x;\r\n", "main.ts"),
+            analyze_source("export type T = number;\nexport const value = 1;\n", "dep.ts"),
+        ];
+        let dependencies = dependencies(&files);
+        assert_eq!(dependencies[0][0].target, Some("dep.ts"));
+        assert!(dependencies[0][0].type_only);
+        assert_eq!(files[0].imports[0].location.start.line, 1);
+        assert_eq!(files[0].exports.len(), 2);
+        assert_eq!(files[0].functions.len(), 1);
+        let mut first = Vec::new();
+        write_graph(&mut first, &files, &dependencies, 1024).unwrap();
+        let graph: Value = serde_json::from_slice(&first).unwrap();
+        assert_eq!(graph["schema"], "JavaScriptApplicationGraph");
+        assert_eq!(graph["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(graph["edges"].as_array().unwrap().len(), 1);
+        let mut second = Vec::new();
+        write_graph(&mut second, &files, &dependencies, 1024).unwrap();
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn tracks_commonjs_without_shadowed_require() {
+        let file = analyze_source(
+            "const dep = require('./dep'); module.exports = dep; exports.named = 1; function local(require) { return require('external'); }",
+            "main.js",
+        );
+        assert_eq!(file.parse_errors, 0);
+        assert_eq!(file.imports.len(), 1);
+        assert_eq!(file.imports[0].source.as_deref(), Some("./dep"));
+        assert_eq!(file.exports.iter().map(|item| item.name.as_str()).collect::<Vec<_>>(), ["default", "named"]);
+    }
 }

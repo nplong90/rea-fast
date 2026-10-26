@@ -1,16 +1,29 @@
 mod analyze;
+mod asar;
+pub mod bundle;
+pub mod diff;
+mod electron;
+mod fuses;
 mod graph;
+mod mcp;
+pub mod semantics;
+pub mod trace;
 
 use clap::{Parser, ValueEnum};
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::Serialize;
+use serde_json::json;
 use std::{error::Error, io::{self, Write}, path::{Path, PathBuf}, time::Instant};
 
 #[derive(Parser)]
-#[command(version, about = "Parallel, non-executing JavaScript/TypeScript structural analysis")]
+#[command(version, about = "Parallel, non-executing JavaScript/TypeScript structural analysis & REA toolkit")]
 struct Cli {
-    path: PathBuf,
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Path to analyze (when no subcommand is specified)
+    path: Option<PathBuf>,
     #[arg(long, value_enum, default_value = "summary")]
     format: Format,
     #[arg(long, default_value_t = 0)]
@@ -18,6 +31,106 @@ struct Cli {
     /// Files larger than this limit remain explicitly unavailable.
     #[arg(long, default_value_t = 16_777_216, value_parser = clap::value_parser!(u64).range(1..))]
     max_file_bytes: u64,
+    /// Run as MCP JSON-RPC stdio server
+    #[arg(long)]
+    mcp: bool,
+}
+
+#[derive(clap::Subcommand)]
+#[command(rename_all = "kebab-case")]
+enum Commands {
+    /// Run as Model Context Protocol (MCP) JSON-RPC stdio server
+    Mcp,
+    /// Run parallel structural AST analysis on JS/TS folder or ASAR archive
+    Analyze {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value = "summary")]
+        format: Format,
+        #[arg(long, default_value_t = 0)]
+        threads: usize,
+        #[arg(long, default_value_t = 16_777_216)]
+        max_file_bytes: u64,
+    },
+    /// Inspect Electron fuse bytes in binary executable
+    Fuses {
+        path: PathBuf,
+    },
+    /// Inspect Chromium Pickle ASAR directory header without unpacking
+    InspectAsar {
+        path: PathBuf,
+    },
+    /// Extract files from ASAR archive with integrity verification
+    Extract {
+        path: PathBuf,
+        #[arg(short, long)]
+        output_dir: Option<PathBuf>,
+        #[arg(long, value_enum, default_value = "fail")]
+        integrity_policy: CliIntegrityPolicy,
+    },
+    /// Recover readable JS modules from bundle files
+    Recover {
+        path: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value = "structural")]
+        extraction_mode: String,
+        #[arg(long, default_value = "standard")]
+        rewrite_level: String,
+    },
+    /// Compare two application graphs or paths
+    Diff {
+        left: String,
+        right: String,
+    },
+    /// Compare export shapes between modules across application graphs
+    ExportShapes {
+        #[arg(long)]
+        left: String,
+        #[arg(long)]
+        left_module: String,
+        #[arg(long)]
+        left_export: String,
+        #[arg(long)]
+        right: String,
+        #[arg(long)]
+        right_module: String,
+        #[arg(long)]
+        right_export: String,
+    },
+    /// Trace feature seed reachability across application graph
+    TraceFeature {
+        app: String,
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        value: String,
+        #[arg(long, default_value = "contains")]
+        match_mode: String,
+        #[arg(long, default_value = "both")]
+        direction: String,
+        #[arg(long)]
+        case_sensitive: bool,
+    },
+    /// Trace JavaScript semantic data-flow and call edges
+    TraceSemantics {
+        app: String,
+        #[arg(long)]
+        node_id: String,
+        #[arg(long, default_value = "forward-influence")]
+        direction: String,
+    },
+    /// Analyze Electron source code for IPC and security anti-patterns
+    AnalyzeElectron {
+        path: PathBuf,
+        #[arg(long)]
+        source: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum CliIntegrityPolicy {
+    Fail,
+    RecordAndContinue,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -43,6 +156,10 @@ struct Summary {
     threads_used: usize,
 }
 
+fn is_asar(path: &Path) -> bool {
+    path.extension().and_then(|s| s.to_str()) == Some("asar")
+}
+
 fn supported(path: &Path) -> bool {
     matches!(path.extension().and_then(|s| s.to_str()), Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts"))
 }
@@ -61,16 +178,67 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     Ok(files)
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
-    let cli = Cli::parse();
+fn print_tool_result(res: Result<serde_json::Value, String>) -> Result<(), Box<dyn Error>> {
+    match res {
+        Ok(val) => {
+            let mut out = io::BufWriter::new(io::stdout().lock());
+            serde_json::to_writer_pretty(&mut out, &val)?;
+            writeln!(out)?;
+            out.flush()?;
+            Ok(())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn execute_analysis(
+    path: &Path,
+    format: Format,
+    threads: usize,
+    max_file_bytes: u64,
+) -> Result<(), Box<dyn Error>> {
     let start = Instant::now();
-    let input = cli.path.canonicalize()?;
-    if input.is_file() && !supported(&input) { return Err("Expected a JS/TS file or directory".into()); }
-    let root = if input.is_file() { input.parent().ok_or("File has no parent")? } else { &input };
-    let files = collect_files(&input)?;
-    if files.is_empty() { return Err("No JS/TS files matched the ignore rules".into()); }
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(cli.threads).build()?;
-    let results: Vec<_> = pool.install(|| files.par_iter().map(|path| analyze::analyze_file(path, root, cli.max_file_bytes)).collect());
+    let input = path.canonicalize()?;
+    if input.is_file() && !supported(&input) && !is_asar(&input) {
+        return Err("Expected a JS/TS file, directory, or .asar archive".into());
+    }
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+    let results: Vec<_> = if is_asar(&input) {
+        let archive = asar::AsarArchive::open(&input)?;
+        let entries: Vec<_> = archive.entries.iter().filter(|e| supported(Path::new(&e.path))).cloned().collect();
+        if entries.is_empty() { return Err("No JS/TS files found in ASAR".into()); }
+        pool.install(|| {
+            entries.par_iter().map(|entry| {
+                if entry.size > max_file_bytes {
+                    return analyze::FileAnalysis {
+                        path: entry.path.clone(),
+                        error: Some(format!("File exceeds --max-file-bytes={max_file_bytes}")),
+                        ..Default::default()
+                    };
+                }
+                match archive.read_file(entry) {
+                    Ok(bytes) => match std::str::from_utf8(&bytes) {
+                        Ok(source) => analyze::analyze_source(source, &entry.path),
+                        Err(_) => analyze::FileAnalysis {
+                            path: entry.path.clone(),
+                            error: Some("File is not valid UTF-8".into()),
+                            ..Default::default()
+                        },
+                    },
+                    Err(e) => analyze::FileAnalysis {
+                        path: entry.path.clone(),
+                        error: Some(e.to_string()),
+                        ..Default::default()
+                    },
+                }
+            }).collect()
+        })
+    } else {
+        let root = if input.is_file() { input.parent().ok_or("File has no parent")? } else { &input };
+        let files = collect_files(&input)?;
+        if files.is_empty() { return Err("No JS/TS files matched the ignore rules".into()); }
+        pool.install(|| files.par_iter().map(|path| analyze::analyze_file(path, root, max_file_bytes)).collect())
+    };
     let dependencies = graph::dependencies(&results);
     let mut summary = Summary { total_files: results.len(), threads_used: pool.current_num_threads(), ..Summary::default() };
     for file in &results {
@@ -85,14 +253,14 @@ fn run() -> Result<(), Box<dyn Error>> {
         summary.unavailable_files += usize::from(file.error.is_some());
     }
     summary.internal_dependencies = dependencies.iter().flatten().filter(|d| d.target.is_some()).count();
-    summary.unresolved_dependencies = dependencies.iter().filter(|d| d.target.is_none()).count();
+    summary.unresolved_dependencies = dependencies.iter().flatten().filter(|d| d.target.is_none()).count();
     let elapsed = start.elapsed().as_secs_f64();
     summary.elapsed_ms = elapsed * 1000.0;
     summary.files_per_second = summary.total_files as f64 / elapsed;
     summary.mb_per_second = summary.total_bytes as f64 / 1_048_576.0 / elapsed;
     let mut out = io::BufWriter::new(io::stdout().lock());
-    match cli.format {
-        Format::Json => graph::write_graph(&mut out, &results, &dependencies, cli.max_file_bytes)?,
+    match format {
+        Format::Json => graph::write_graph(&mut out, &results, &dependencies, max_file_bytes)?,
         Format::JsonSummary => serde_json::to_writer(&mut out, &summary)?,
         Format::Summary => write!(out,
             "Files       {:>12}\nLOC         {:>12}\nBytes       {:>12}\nImports     {:>12}\nExports     {:>12}\nFunctions   {:>12}\nClasses     {:>12}\nSymbols     {:>12}\nParse errors{:>12}\nUnavailable {:>12}\nInternal dependencies {:>6}\nUnresolved/external   {:>6}\nThreads     {:>12}\nAnalysis ms {:>12.2}\nFiles/s     {:>12.0}\nMiB/s       {:>12.2}\n",
@@ -106,6 +274,133 @@ fn run() -> Result<(), Box<dyn Error>> {
     out.flush()?;
     if summary.unavailable_files > 0 { return Err(format!("{} files unavailable; output retains partial results", summary.unavailable_files).into()); }
     Ok(())
+}
+
+fn run() -> Result<(), Box<dyn Error>> {
+    let cli = Cli::parse();
+    if cli.mcp {
+        return mcp::run_mcp_server();
+    }
+    if let Some(command) = cli.command {
+        match command {
+            Commands::Mcp => mcp::run_mcp_server(),
+            Commands::Analyze {
+                path,
+                format,
+                threads,
+                max_file_bytes,
+            } => execute_analysis(&path, format, threads, max_file_bytes),
+            Commands::Fuses { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_electron_fuses", &args))
+            }
+            Commands::InspectAsar { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_asar", &args))
+            }
+            Commands::Extract {
+                path,
+                output_dir,
+                integrity_policy,
+            } => {
+                let mut args = json!({
+                    "path": path.to_string_lossy(),
+                    "integrity_policy": match integrity_policy {
+                        CliIntegrityPolicy::Fail => "fail",
+                        CliIntegrityPolicy::RecordAndContinue => "record-and-continue",
+                    }
+                });
+                if let Some(out) = output_dir {
+                    args["output_directory"] = json!(out.to_string_lossy());
+                }
+                print_tool_result(mcp::handle_tool_call("extract_artifact", &args))
+            }
+            Commands::Recover {
+                path,
+                output_dir,
+                extraction_mode,
+                rewrite_level,
+            } => {
+                let args = json!({
+                    "path": path.to_string_lossy(),
+                    "output_directory": output_dir.to_string_lossy(),
+                    "extraction_mode": extraction_mode,
+                    "rewrite_level": rewrite_level,
+                });
+                print_tool_result(mcp::handle_tool_call("recover_javascript_sources", &args))
+            }
+            Commands::Diff { left, right } => {
+                let args = json!({ "left": left, "right": right });
+                print_tool_result(mcp::handle_tool_call("compare_application_versions", &args))
+            }
+            Commands::ExportShapes {
+                left,
+                left_module,
+                left_export,
+                right,
+                right_module,
+                right_export,
+            } => {
+                let args = json!({
+                    "left": left,
+                    "left_module_path": left_module,
+                    "left_export_name": left_export,
+                    "right": right,
+                    "right_module_path": right_module,
+                    "right_export_name": right_export,
+                });
+                print_tool_result(mcp::handle_tool_call("compare_javascript_export_shapes", &args))
+            }
+            Commands::TraceFeature {
+                app,
+                kind,
+                value,
+                match_mode,
+                direction,
+                case_sensitive,
+            } => {
+                let args = json!({
+                    "application": app,
+                    "seed": {
+                        "kind": kind,
+                        "value": value,
+                        "match": match_mode,
+                        "case_sensitive": case_sensitive,
+                    },
+                    "direction": direction,
+                });
+                print_tool_result(mcp::handle_tool_call("trace_application_feature", &args))
+            }
+            Commands::TraceSemantics {
+                app,
+                node_id,
+                direction,
+            } => {
+                let args = json!({
+                    "application": app,
+                    "query": {
+                        "seed": {
+                            "kind": "semantic-node",
+                            "node_id": node_id,
+                        },
+                        "direction": direction,
+                    }
+                });
+                print_tool_result(mcp::handle_tool_call("trace_javascript_semantics", &args))
+            }
+            Commands::AnalyzeElectron { path, source } => {
+                let mut args = json!({ "path": path.to_string_lossy() });
+                if let Some(src) = source {
+                    args["source"] = json!(src);
+                }
+                print_tool_result(mcp::handle_tool_call("analyze_electron_source", &args))
+            }
+        }
+    } else if let Some(path) = cli.path {
+        execute_analysis(&path, cli.format, cli.threads, cli.max_file_bytes)
+    } else {
+        Err("Path or subcommand required unless running with --mcp".into())
+    }
 }
 
 fn main() {

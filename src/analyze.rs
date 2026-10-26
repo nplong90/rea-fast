@@ -3,7 +3,7 @@ use oxc_ast::{AstKind, ast::*};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::{Semantic, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType, Span};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{io::Read, path::Path};
 
@@ -23,9 +23,9 @@ pub struct FileAnalysis {
     pub error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Position { pub line: u32, pub column: u32 }
-#[derive(Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Location { pub start: Position, pub end: Position, pub byte_start: u32, pub byte_end: u32 }
 #[derive(Serialize)]
 pub struct ImportSpecifier { pub imported: String, pub local: String, pub kind: &'static str, pub type_only: bool }
