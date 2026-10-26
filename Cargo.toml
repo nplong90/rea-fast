@@ -17,6 +17,8 @@ sha2 = "0.10"
 oxc_semantic = "0.72"
 regex = "1.13.1"
 brotli = "7"
+object = "0.40.0"
+flate2 = "1.1.10"
 
 [profile.release]
 opt-level = 3

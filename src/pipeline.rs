@@ -5,8 +5,11 @@ use crate::{
     electron::{self, ElectronStaticFindings},
     fuses::{self, FuseReport, FuseState},
     graph,
+    mobile::{AndroidPackageInfo, MobileInspector},
+    native_binary::{BinaryLayout, GoBuildInfo, NativeInspector, RustBinaryInfo, WasmInterface},
     secrets::SecretScanner,
     sourcemap::SourceMapExtractor,
+    storage_pcap::{PcapCaptureInfo, SqliteDbInfo, StoragePcapInspector},
     tauri::TauriScanner,
 };
 use ignore::WalkBuilder;
@@ -30,6 +33,11 @@ pub enum TargetKind {
     JavaScriptBundle,
     SourceDirectory,
     SingleSourceFile,
+    NativeBinary,
+    WasmArtifact,
+    AndroidApk,
+    SqliteDatabase,
+    PcapCapture,
     Unknown,
 }
 
@@ -124,9 +132,13 @@ impl AuditPipeline {
         }
 
         if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
-            match ext {
+            match ext.to_lowercase().as_str() {
                 "asar" => return TargetKind::AsarArchive,
                 "map" => return TargetKind::SourceMap,
+                "apk" => return TargetKind::AndroidApk,
+                "wasm" => return TargetKind::WasmArtifact,
+                "db" | "sqlite" | "sqlite3" => return TargetKind::SqliteDatabase,
+                "pcap" | "pcapng" | "cap" => return TargetKind::PcapCapture,
                 "js" | "mjs" | "cjs" => {
                     // Check if bundle or single source
                     if let Ok(content) = fs::read_to_string(path) {
@@ -144,13 +156,42 @@ impl AuditPipeline {
             }
         }
 
-        // Check if executable / Electron or Tauri binary
+        // Check magic bytes
         if let Ok(bytes) = fs::read(path) {
+            if bytes.len() >= 4 && &bytes[..4] == b"\0asm" {
+                return TargetKind::WasmArtifact;
+            }
+            if bytes.len() >= 16 && &bytes[..16] == b"SQLite format 3\0" {
+                return TargetKind::SqliteDatabase;
+            }
+            if bytes.len() >= 4 {
+                let magic4 = &bytes[..4];
+                if magic4 == b"\xd4\xc3\xb2\xa1"
+                    || magic4 == b"\xa1\xb2\xc3\xd4"
+                    || magic4 == b"\x4d\x3c\xb2\xa1"
+                    || magic4 == b"\xa1\xb2\x3c\x4d"
+                    || magic4 == b"\x0a\x0d\x0d\x0a"
+                {
+                    return TargetKind::PcapCapture;
+                }
+            }
             if bytes.windows(32).any(|w| w == b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX") {
                 return TargetKind::ElectronBinary;
             }
             if TauriScanner::detect_binary(&bytes).is_tauri {
                 return TargetKind::TauriBinary;
+            }
+            // Check native binary headers: ELF, PE, Mach-O
+            if bytes.starts_with(b"\x7fELF")
+                || (bytes.len() >= 2 && &bytes[..2] == b"MZ")
+                || (bytes.len() >= 4
+                    && (bytes.starts_with(b"\xfe\xed\xfa\xce")
+                        || bytes.starts_with(b"\xfe\xed\xfa\xcf")
+                        || bytes.starts_with(b"\xce\xfa\xed\xfe")
+                        || bytes.starts_with(b"\xcf\xfa\xed\xfe")
+                        || bytes.starts_with(b"\xca\xfe\xba\xbe")))
+            {
+                return TargetKind::NativeBinary;
             }
         }
 
@@ -292,6 +333,54 @@ impl AuditPipeline {
                 if let Ok(sm_res) = SourceMapExtractor::extract(&target_canonical, &sm_dest) {
                     extracted_sources_count = sm_res.extracted_files.len();
                     stages.push("sourcemap-reconstruction".to_string());
+                }
+                target_canonical.clone()
+            }
+            TargetKind::AndroidApk => {
+                stages.push("android-apk-audit".to_string());
+                if let Ok(apk_info) = MobileInspector::inspect_apk(&target_canonical) {
+                    Self::audit_android_apk(&apk_info, &mut findings);
+                }
+                target_canonical.clone()
+            }
+            TargetKind::NativeBinary => {
+                stages.push("native-binary-audit".to_string());
+                if let Ok(layout) = NativeInspector::inspect_layout(&target_canonical) {
+                    Self::audit_native_layout(&layout, &mut findings);
+                }
+                if let Ok(go_info) = NativeInspector::inspect_go(&target_canonical) {
+                    if go_info.has_go_buildinfo {
+                        stages.push("go-buildinfo-audit".to_string());
+                        Self::audit_go_buildinfo(&go_info, &target_canonical, &mut findings);
+                    }
+                }
+                if let Ok(rust_info) = NativeInspector::inspect_rust(&target_canonical) {
+                    if rust_info.has_rust_auditable {
+                        stages.push("rust-auditable-audit".to_string());
+                        Self::audit_rust_info(&rust_info, &target_canonical, &mut findings);
+                    }
+                }
+                target_canonical.clone()
+            }
+            TargetKind::WasmArtifact => {
+                stages.push("wasm-interface-audit".to_string());
+                if let Ok(bytes) = fs::read(&target_canonical) {
+                    let wasm = NativeInspector::inspect_wasm(&bytes);
+                    Self::audit_wasm(&wasm, &target_canonical, &mut findings);
+                }
+                target_canonical.clone()
+            }
+            TargetKind::SqliteDatabase => {
+                stages.push("sqlite-database-audit".to_string());
+                if let Ok(db_info) = StoragePcapInspector::inspect_sqlite(&target_canonical) {
+                    Self::audit_sqlite(&db_info, &mut findings);
+                }
+                target_canonical.clone()
+            }
+            TargetKind::PcapCapture => {
+                stages.push("pcap-packet-audit".to_string());
+                if let Ok(pcap_info) = StoragePcapInspector::inspect_pcap(&target_canonical) {
+                    Self::audit_pcap(&pcap_info, &mut findings);
                 }
                 target_canonical.clone()
             }
@@ -536,6 +625,220 @@ impl AuditPipeline {
                     });
                 }
             }
+        }
+    }
+
+    fn audit_android_apk(apk: &AndroidPackageInfo, findings: &mut Vec<PipelineFinding>) {
+        let file_opt = Some(apk.path.clone());
+        if let Some(ref pkg) = apk.package_name {
+            findings.push(PipelineFinding {
+                category: "android-package".to_string(),
+                severity: Severity::Info,
+                title: format!("Package: {}", pkg),
+                description: format!("Parsed package name from AndroidManifest.xml: {}", pkg),
+                file: file_opt.clone(),
+                line: None,
+            });
+        }
+        for perm in &apk.permissions {
+            let perm_lower = perm.to_lowercase();
+            let (sev, desc) = if perm_lower.contains("record_audio")
+                || perm_lower.contains("send_sms")
+                || perm_lower.contains("read_sms")
+                || perm_lower.contains("receive_sms")
+                || perm_lower.contains("system_alert_window")
+                || perm_lower.contains("write_settings")
+            {
+                (Severity::High, "Sensitive/dangerous system permission requested")
+            } else if perm_lower.contains("camera")
+                || perm_lower.contains("fine_location")
+                || perm_lower.contains("read_contacts")
+                || perm_lower.contains("write_external_storage")
+            {
+                (Severity::Medium, "Privileged resource access permission requested")
+            } else {
+                (Severity::Info, "Standard Android application permission")
+            };
+            findings.push(PipelineFinding {
+                category: "android-permission".to_string(),
+                severity: sev,
+                title: format!("Permission: {}", perm),
+                description: desc.to_string(),
+                file: file_opt.clone(),
+                line: None,
+            });
+        }
+        if !apk.native_libraries.is_empty() {
+            let abis: Vec<String> = apk.native_libraries.keys().cloned().collect();
+            findings.push(PipelineFinding {
+                category: "android-native".to_string(),
+                severity: Severity::Info,
+                title: format!("Native ABIs: {}", abis.join(", ")),
+                description: format!("Discovered native C/C++ libraries across {} ABIs", abis.len()),
+                file: file_opt,
+                line: None,
+            });
+        }
+    }
+
+    fn audit_native_layout(layout: &BinaryLayout, findings: &mut Vec<PipelineFinding>) {
+        let file_opt = Some(layout.path.clone());
+        findings.push(PipelineFinding {
+            category: "binary-info".to_string(),
+            severity: Severity::Info,
+            title: format!("Binary Format: {} ({})", layout.format, layout.architecture),
+            description: format!(
+                "Sections: {}, Symbols: {}, Entry: 0x{:x}, Imports: {}",
+                layout.total_sections, layout.symbol_count, layout.entry_point, layout.imports.len()
+            ),
+            file: file_opt.clone(),
+            line: None,
+        });
+
+        for imp in &layout.imports {
+            let imp_lower = imp.to_lowercase();
+            if imp_lower.contains("system")
+                || imp_lower.contains("popen")
+                || imp_lower.contains("execve")
+                || imp_lower.contains("ptrace")
+                || imp_lower.contains("virtualalloc")
+                || imp_lower.contains("createremotethread")
+                || imp_lower.contains("writeprocessmemory")
+            {
+                findings.push(PipelineFinding {
+                    category: "risky-import".to_string(),
+                    severity: Severity::Medium,
+                    title: format!("Dangerous Native Import: {}", imp),
+                    description: "Executable imports low-level execution/injection API".to_string(),
+                    file: file_opt.clone(),
+                    line: None,
+                });
+            }
+        }
+    }
+
+    fn audit_go_buildinfo(go: &GoBuildInfo, path: &Path, findings: &mut Vec<PipelineFinding>) {
+        let file_str = path.to_string_lossy().to_string();
+        if let Some(ref v) = go.go_version {
+            findings.push(PipelineFinding {
+                category: "go-compiler".to_string(),
+                severity: Severity::Info,
+                title: format!("Go Compiler: {}", v),
+                description: format!("Embedded Go build version: {}", v),
+                file: Some(file_str.clone()),
+                line: None,
+            });
+        }
+        if let Some(ref m) = go.main_module {
+            findings.push(PipelineFinding {
+                category: "go-module".to_string(),
+                severity: Severity::Info,
+                title: format!("Go Main Module: {}", m),
+                description: format!("Dependencies embedded: {}", go.raw_deps.len()),
+                file: Some(file_str),
+                line: None,
+            });
+        }
+    }
+
+    fn audit_rust_info(rust: &RustBinaryInfo, path: &Path, findings: &mut Vec<PipelineFinding>) {
+        let file_str = path.to_string_lossy().to_string();
+        if let Some(ref commit) = rust.rustc_commit {
+            findings.push(PipelineFinding {
+                category: "rustc-compiler".to_string(),
+                severity: Severity::Info,
+                title: format!("Rustc Commit: {}", commit),
+                description: format!("Source build commit: https://github.com/rust-lang/rust/commit/{}", commit),
+                file: Some(file_str.clone()),
+                line: None,
+            });
+        }
+        if rust.has_rust_auditable {
+            findings.push(PipelineFinding {
+                category: "cargo-auditable".to_string(),
+                severity: Severity::Info,
+                title: "Cargo Auditable Dependency Bill-of-Materials Present".to_string(),
+                description: "Embedded .dep-v0 section contains complete verifiable dependency tree".to_string(),
+                file: Some(file_str),
+                line: None,
+            });
+        }
+    }
+
+    fn audit_wasm(wasm: &WasmInterface, path: &Path, findings: &mut Vec<PipelineFinding>) {
+        let file_str = path.to_string_lossy().to_string();
+        findings.push(PipelineFinding {
+            category: "wasm-interface".to_string(),
+            severity: Severity::Info,
+            title: format!("WebAssembly Module (v{})", wasm.version),
+            description: format!(
+                "Sections: {}, Imports: {}, Exports: {}",
+                wasm.sections.len(), wasm.imports.len(), wasm.exports.len()
+            ),
+            file: Some(file_str),
+            line: None,
+        });
+    }
+
+    fn audit_sqlite(db: &SqliteDbInfo, findings: &mut Vec<PipelineFinding>) {
+        let file_opt = Some(db.path.clone());
+        findings.push(PipelineFinding {
+            category: "sqlite-db".to_string(),
+            severity: Severity::Info,
+            title: format!("SQLite Database: {} tables", db.total_tables),
+            description: format!(
+                "Page size: {} bytes, user_version: {}, schema_cookie: {}, changes: {}",
+                db.page_size, db.user_version, db.schema_cookie, db.change_counter
+            ),
+            file: file_opt.clone(),
+            line: None,
+        });
+        for tbl in &db.tables {
+            let name_lower = tbl.name.to_lowercase();
+            if name_lower.contains("user")
+                || name_lower.contains("pass")
+                || name_lower.contains("auth")
+                || name_lower.contains("token")
+                || name_lower.contains("secret")
+                || name_lower.contains("cred")
+                || name_lower.contains("key")
+                || name_lower.contains("session")
+            {
+                findings.push(PipelineFinding {
+                    category: "sqlite-sensitive-data".to_string(),
+                    severity: Severity::Medium,
+                    title: format!("Sensitive Table Identified: '{}'", tbl.name),
+                    description: format!("Database contains '{}' table storing credentials or auth data", tbl.name),
+                    file: file_opt.clone(),
+                    line: None,
+                });
+            }
+        }
+    }
+
+    fn audit_pcap(pcap: &PcapCaptureInfo, findings: &mut Vec<PipelineFinding>) {
+        let file_opt = Some(pcap.path.clone());
+        findings.push(PipelineFinding {
+            category: "pcap-capture".to_string(),
+            severity: Severity::Info,
+            title: format!("Network Capture: {} ({} packets, {} bytes)", pcap.format, pcap.total_packets, pcap.total_bytes),
+            description: format!(
+                "Protocols: {}, Unique IPs: {}, Unique Ports: {}",
+                pcap.protocols.join(", "), pcap.unique_ips.len(), pcap.unique_ports.len()
+            ),
+            file: file_opt.clone(),
+            line: None,
+        });
+
+        if pcap.unique_ports.contains(&80) || pcap.unique_ports.contains(&23) || pcap.unique_ports.contains(&21) {
+            findings.push(PipelineFinding {
+                category: "cleartext-traffic".to_string(),
+                severity: Severity::Medium,
+                title: "Cleartext Protocol Traffic Observed".to_string(),
+                description: "Capture contains packets routed through unencrypted ports (HTTP 80, Telnet 23, or FTP 21)".to_string(),
+                file: file_opt,
+                line: None,
+            });
         }
     }
 }

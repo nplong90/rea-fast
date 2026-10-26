@@ -4,10 +4,13 @@ use crate::{
     bundle::{ExtractionMode, RewriteLevel, SourceRecoverer},
     diff::ApplicationDiffer,
     electron, fuses, graph,
+    mobile::MobileInspector,
+    native_binary::NativeInspector,
     pipeline::AuditPipeline,
     secrets::SecretScanner,
     semantics::{self, SemanticQuery},
     sourcemap::SourceMapExtractor,
+    storage_pcap::StoragePcapInspector,
     tauri::TauriScanner,
     trace::{ApplicationFeatureTracer, FeatureSeed, TraceDirection},
 };
@@ -558,6 +561,104 @@ fn tool_list() -> Value {
                     },
                     "required": ["path"]
                 }
+            },
+            {
+                "name": "inspect_binary_layout",
+                "description": "Inspect file-backed section/segment ranges, entry point, symbols, and imports of ELF, PE, or Mach-O executable without process execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to binary file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_go_binary",
+                "description": "Inspect embedded Go compiler version, main module path, and dependency list via Go buildinfo markers without process execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to Go binary file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_rust_binary",
+                "description": "Inspect embedded Cargo auditable dependency graph and rustc commit hash without process execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to Rust binary file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_wasm_artifact",
+                "description": "Inspect WebAssembly binary format, LEB128 sections, exported and imported symbols without WASM runtime execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to .wasm file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_android_package",
+                "description": "Inspect Android APK package structure, permissions, activities, services, DEX summaries, and native libraries without device/emulator execution.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to .apk file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_sqlite_database",
+                "description": "Inspect SQLite database file header, page size, cookies, and extract table/index/view schemas without opening a live database connection.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to SQLite database file"
+                        }
+                    },
+                    "required": ["path"]
+                }
+            },
+            {
+                "name": "inspect_packet_capture",
+                "description": "Inspect PCAP / PCAPNG network packet capture, timestamps, IP endpoints, port distribution, and protocol statistics without live network capture.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to .pcap or .pcapng file"
+                        }
+                    },
+                    "required": ["path"]
+                }
             }
         ]
     })
@@ -817,6 +918,69 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "inspect_binary_layout" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_layout(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_go_binary" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_go(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_rust_binary" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_rust(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_wasm_artifact" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_wasm(&bytes);
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_android_package" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = MobileInspector::inspect_apk(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_sqlite_database" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = StoragePcapInspector::inspect_sqlite(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "inspect_packet_capture" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = StoragePcapInspector::inspect_pcap(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -953,7 +1117,7 @@ mod tests {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(list.len(), 15);
+        assert_eq!(list.len(), 22);
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -969,6 +1133,13 @@ mod tests {
         assert!(names.contains(&"pack_asar"));
         assert!(names.contains(&"scan_secrets"));
         assert!(names.contains(&"audit_tauri"));
+        assert!(names.contains(&"inspect_binary_layout"));
+        assert!(names.contains(&"inspect_go_binary"));
+        assert!(names.contains(&"inspect_rust_binary"));
+        assert!(names.contains(&"inspect_wasm_artifact"));
+        assert!(names.contains(&"inspect_android_package"));
+        assert!(names.contains(&"inspect_sqlite_database"));
+        assert!(names.contains(&"inspect_packet_capture"));
     }
 
     #[test]

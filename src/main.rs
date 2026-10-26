@@ -6,10 +6,13 @@ mod electron;
 mod fuses;
 mod graph;
 mod mcp;
+pub mod mobile;
+pub mod native_binary;
 pub mod pipeline;
 pub mod secrets;
 pub mod semantics;
 pub mod sourcemap;
+pub mod storage_pcap;
 pub mod tauri;
 pub mod trace;
 
@@ -157,6 +160,34 @@ enum Commands {
         path: PathBuf,
         #[arg(short, long)]
         output_dir: Option<PathBuf>,
+    },
+    /// Inspect binary layout (sections, entry point, symbols, imports) for ELF, PE, Mach-O
+    InspectBinary {
+        path: PathBuf,
+    },
+    /// Inspect embedded Go buildinfo, version, module path, dependencies
+    InspectGo {
+        path: PathBuf,
+    },
+    /// Inspect Rust compiler commit and cargo-auditable dependency graph
+    InspectRust {
+        path: PathBuf,
+    },
+    /// Inspect WebAssembly binary sections, imports, and exports
+    InspectWasm {
+        path: PathBuf,
+    },
+    /// Inspect Android APK manifest, permissions, activities, dex, and native libraries
+    InspectApk {
+        path: PathBuf,
+    },
+    /// Inspect SQLite database header, page size, cookies, and table schemas
+    InspectSqlite {
+        path: PathBuf,
+    },
+    /// Inspect PCAP / PCAPNG packet captures (protocols, IP/port sets, packet counts)
+    InspectPcap {
+        path: PathBuf,
     },
 }
 
@@ -469,6 +500,34 @@ fn run() -> Result<(), Box<dyn Error>> {
                     args["output_directory"] = json!(out.to_string_lossy());
                 }
                 print_tool_result(mcp::handle_tool_call("audit_tauri", &args))
+            }
+            Commands::InspectBinary { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_binary_layout", &args))
+            }
+            Commands::InspectGo { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_go_binary", &args))
+            }
+            Commands::InspectRust { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_rust_binary", &args))
+            }
+            Commands::InspectWasm { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_wasm_artifact", &args))
+            }
+            Commands::InspectApk { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_android_package", &args))
+            }
+            Commands::InspectSqlite { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_sqlite_database", &args))
+            }
+            Commands::InspectPcap { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_packet_capture", &args))
             }
         }
     } else if let Some(path) = cli.path {

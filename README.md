@@ -18,11 +18,18 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
-  - Full CLI with 14 subcommands.
-  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 15 RE tools.
+  - Full CLI with 21 subcommands.
+  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 22 RE tools.
 - **Chromium Pickle ASAR Repacker**: Pack directory into standard ASAR archive with 512 KiB block-level SHA-256 integrity hashing and 4-byte pickle alignment.
 - **High-Entropy Secrets & API Discovery**: Scans codebases for leaked tokens (AWS, GitHub, Slack, Stripe, JWT, Private Keys) with non-leaking redaction and discovers API route endpoints.
 - **Tauri Application Auditor**: Fingerprint v1/v2 Tauri desktop binaries, extract embedded `tauri.conf.json` via balanced-brace slice parser, recover embedded HTML/Brotli assets, and audit `invoke`/`listen`/`emit` IPC commands.
+- **Multi-Format Native Binary Inspector**: Header, section, symbol, and import extraction for ELF, PE, and Mach-O executables without execution.
+- **Go BuildInfo & Module Extractor**: Pure byte-scanning of `\xff Go buildinf:` to discover compiler versions, main modules, and dependency trees.
+- **Rust Auditable Inspector**: Decompression of `.dep-v0` sections to parse embedded cargo auditable dependency manifests and `/rustc/` commit hashes.
+- **WebAssembly Inspector**: Validates `\0asm` binaries, LEB128 lengths, section catalog, imports, and exports.
+- **Android APK & AXML Dissector**: In-tree zero-dependency ZIP parser, DEX hashing, native library catalog, and AXML string pool extraction for permissions, activities, and services.
+- **SQLite Database Inspector**: Zero-execution SQLite format 3 verification, page size, change counter, and schema DDL extraction.
+- **Network PCAP/PCAPNG Dissector**: Header and packet dissection for standard/nanosecond PCAP and PCAPNG, extracting IPv4, IPv6, TCP, UDP, ICMP, and port lists.
 
 ---
 
@@ -121,6 +128,48 @@ Execute complete multi-stage automated audit on any target (ASAR, binary, bundle
 rea-fast audit /path/to/app.asar -o ./audit_workspace
 ```
 
+### 13. Native Binary Dissection
+Inspect ELF, PE, or Mach-O sections, symbols, and dynamic imports:
+```bash
+rea-fast inspect-binary /path/to/binary
+```
+
+### 14. Go BuildInfo & Dependency Extraction
+Extract Go version, main module, and dependencies:
+```bash
+rea-fast inspect-go /path/to/go_binary
+```
+
+### 15. Rust Cargo-Auditable Inspection
+Extract cargo-auditable crate dependency graph and rustc commit:
+```bash
+rea-fast inspect-rust /path/to/rust_binary
+```
+
+### 16. WebAssembly Inspection
+Inspect WASM sections, imports, and exports:
+```bash
+rea-fast inspect-wasm /path/to/module.wasm
+```
+
+### 17. Android APK & AXML Dissection
+Hash DEX files, list native ABIs, and extract manifest permissions/components:
+```bash
+rea-fast inspect-apk /path/to/app.apk
+```
+
+### 18. SQLite Database Inspection
+Verify database headers, page configuration, and schema DDL tables:
+```bash
+rea-fast inspect-sqlite /path/to/database.db
+```
+
+### 19. Network Packet Capture Dissection
+Dissect PCAP/PCAPNG packets, endpoints, ports, and protocol distributions:
+```bash
+rea-fast inspect-pcap /path/to/capture.pcap
+```
+
 ---
 
 ## Model Context Protocol (MCP) Integration
@@ -162,6 +211,13 @@ rea-fast mcp
 13. `pack_asar`: Pack a directory into a Chromium Pickle ASAR archive with SHA-256 block hashing.
 14. `scan_secrets`: Scan source code or files for high-entropy credentials, tokens, and API endpoints with masking.
 15. `audit_tauri`: Audit Tauri desktop binaries for framework signals, embedded config, assets, and IPC calls.
+16. `inspect_binary_layout`: Dissect sections, symbols, architecture, and dynamic imports in ELF/PE/Mach-O binaries.
+17. `inspect_go_binary`: Extract Go runtime version, main module path, and dependency package list.
+18. `inspect_rust_binary`: Extract cargo-auditable crate dependency graph and rustc commit hash.
+19. `inspect_wasm_artifact`: Decode WebAssembly sections, custom attributes, imports, and exports.
+20. `inspect_android_package`: Dissect APK packages, hash DEX executables, catalog native libs, and extract AXML permissions.
+21. `inspect_sqlite_database`: Verify SQLite format 3 headers, page sizes, schema cookies, and DDL table definitions.
+22. `inspect_packet_capture`: Dissect PCAP/PCAPNG traffic, extract IPv4/IPv6 endpoints, TCP/UDP ports, and protocol distributions.
 
 ---
 
