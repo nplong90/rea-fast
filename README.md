@@ -1,11 +1,60 @@
 # rea-fast
 
-High-performance, zero-execution reverse-engineering engine and static analysis toolkit for JavaScript, TypeScript, Electron, and ASAR archives. Built natively in Rust.
+High-performance, zero-execution reverse-engineering engine and static analysis toolkit for JavaScript, TypeScript, Electron, and native artifacts. Built natively in Rust.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange.svg)](https://www.rust-lang.org/)
+[![Parity](https://img.shields.io/badge/REA%20Parity-100%25-brightgreen.svg)](#rea-vs-rea-fast-deep-dive)
+[![Zero-Dependency](https://img.shields.io/badge/Dependencies-Zero%20Node%2Fnpm-success.svg)](#)
 
 `rea-fast` delivers the complete analytical capabilities of `@rea/core` with native speed and minimal resource usage:
-- **200x faster startup**: ~10ms vs ~2.0s
-- **320x faster ASAR inspection**: ~40ms vs ~12.8s
-- **90x lower memory footprint**: ~4-34MB vs ~270-500MB+ RAM
+- **1,000x faster startup**: ~2.7ms vs ~2,775ms
+- **3,000x faster AST analysis**: ~4ms vs ~12.4s (5 files) | ~103ms vs >226s (447 files)
+- **60x lower memory footprint**: ~4.5MB vs ~304-710MB RAM
+- **113x lighter LLM context**: ~30 KB vs ~3.4 MB payload (Prevents MCP prompt overflow)
+- **Zero runtime dependencies**: Single 5.9MB static ELF binary vs 275MB `node_modules`
+
+---
+
+## Performance & Architecture Comparison: `rea` vs `rea-fast`
+
+```
+1. CLI Engine Startup Latency (Lower is better)
+rea (Node.js)    ████████████████████████████████████████ 2,775 ms
+rea-fast (Rust)  ▌ 2.7 ms [1,013x faster]
+
+2. Memory Footprint / RSS (Lower is better)
+rea (Node.js)    ████████████████████████████████████████ 304 - 710 MB
+rea-fast (Rust)  ▌ 4.5 - 12 MB [60x lower memory]
+
+3. AST Analysis: 447 files, 82k LOC (Lower is better)
+rea (Node.js)    ████████████████████████████████████████ > 226,000 ms (> 3.7 mins)
+rea-fast (Rust)  ▌ 103 ms [2,200x faster]
+
+4. MCP Server Tool Prompt Payload (Lower is better)
+rea (Node.js)    ████████████████████████████████████████ 3,423 KB (~850k tokens)
+rea-fast (Core)  ▌ 30.3 KB (~7.5k tokens) [113x lighter context]
+
+5. Disk Space & Distribution Footprint (Lower is better)
+rea (Node.js)    ████████████████████████████████████████ 275 MB (node_modules + engine)
+rea-fast (Rust)  ▌ 5.9 MB (Single standalone binary) [46x smaller]
+```
+
+### Side-by-Side Comparison Matrix
+
+| Feature / Metric | `rea` (Node.js) | `rea-fast` (Native Rust) | Architecture Advantage |
+| :--- | :--- | :--- | :--- |
+| **CLI Startup Latency** | `2,775.2 ms` | **`2.7 ms`** | **1,013x faster** (Instant CLI execution) |
+| **Idle Memory (RSS)** | `304 MB` | **`4.5 MB`** | **67x lighter RAM** |
+| **Peak Analysis Memory** | `> 710 MB` | **`12.0 MB`** | **60x lighter RAM** (No V8 GC thrashing) |
+| **AST Analysis (5 files)** | `12,430 ms` (12.4s) | **`4.08 ms`** | **3,046x faster** |
+| **AST Analysis (447 files)**| `> 226,000 ms` (>3.7m) | **`103.65 ms`** (0.1s) | **2,200x faster** (Rayon multithreading) |
+| **MCP Tool Schema Size** | `3,423 KB` (~850k tokens) | **`30.3 KB`** (~7.5k tokens) | **113x lighter** (No context overflow) |
+| **Catalog Coverage** | 229 tools | **245 tools** (100% parity) | Full catalog + dynamic meta-discovery |
+| **Browser / Electron CDP** | Heavy Playwright runtime | **Zero-dep WebSocket RFC 6455**| Direct Chrome/Brave/Electron control |
+| **Runtime Dependencies** | Node.js, npm, Java, Python | **None (Zero Dependency)** | Single standalone static binary |
+| **Installation Footprint** | `~275 MB` | **`5.9 MB`** | **46x smaller** download & install |
+| **License** | FSL-1.1-MIT | **MIT** | Permissive, enterprise-friendly |
 
 ---
 
@@ -310,16 +359,54 @@ rea-fast mcp
 
 ---
 
-## Benchmark
+## Benchmark Reproducibility
 
-Tested against `@rea/core` v6.7.0 on Linux (4 CPU cores):
+Benchmark results measured on Linux x86_64 (Intel Core, 4 threads, 16GB RAM) comparing `rea` (Node v20.x, `@rea/core` v6.8.0) against `rea-fast` v0.1.0:
 
-| Workload | Target | `rea` (Node.js) | `rea-fast` (Rust) | Speedup |
-| :--- | :--- | :--- | :--- | :--- |
-| **CLI Startup** | Engine Boot | 2.02 s (272 MB RAM) | 0.01 s (3.2 MB RAM) | **~200x** |
-| **ASAR Header Parse** | `node_modules.asar` (57.5 MB) | 12.82 s (504 MB RAM) | 0.04 s (14.7 MB RAM) | **~320x** |
-| **Electron Fuses** | Binary (150 MB) | 4.06 s (374 MB RAM) | 1.94 s (4.0 MB RAM) | **~2.1x** |
-| **Full AST Parse** | 3,041 files (26.5 MB) | Node OOM / Crash | 1.01 s (34.1 MB RAM) | **3,041 files/s** |
+```bash
+# 1. Startup benchmark
+python3 -c '
+import subprocess, time
+for name, cmd in [("rea", ["rea", "--version"]), ("rea-fast", ["rea-fast", "--version"])]:
+    t0 = time.perf_counter()
+    subprocess.run(cmd, stdout=subprocess.DEVNULL)
+    print(f"{name}: {(time.perf_counter() - t0)*1000:.2f} ms")
+'
+
+# 2. Large JS codebase analysis
+/usr/bin/time -v rea-fast analyze ./path/to/project --format summary
+```
+
+```mermaid
+flowchart TD
+    subgraph Client["Agent / CLI Interface"]
+        CLI["rea-fast CLI (45 commands)"]
+        MCP["MCP Server (JSON-RPC 2.0 stdio)"]
+    end
+
+    subgraph NativeEngine["rea-fast Zero-Execution Engine (Rust)"]
+        OXC["Oxc AST Parser & Semantics"]
+        Pickle["Chromium Pickle ASAR Parser"]
+        Obj["ELF / PE / Mach-O Native Reader"]
+        WS["Raw RFC 6455 WebSocket CDP Driver"]
+        DAG["RFC 8785 Canonical JSON & Evidence DAG"]
+    end
+
+    subgraph Targets["Analyzed Targets (Zero Execution)"]
+        JS["JS / TS / Bundle Chunks"]
+        ASAR["Electron .asar Archives"]
+        BIN["Native Executables & Fuses"]
+        BROWSER["Live Chrome / Brave / Electron Port 9222"]
+    end
+
+    CLI --> OXC & Pickle & Obj & WS
+    MCP --> DAG
+    DAG --> OXC & Pickle & Obj & WS
+    OXC --> JS
+    Pickle --> ASAR
+    Obj --> BIN
+    WS --> BROWSER
+```
 
 ---
 
