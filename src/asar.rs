@@ -388,13 +388,6 @@ pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn
     let mut root_files = serde_json::Map::new();
     let mut current_offset: u64 = 0;
     let mut total_bytes: u64 = 0;
-
-    struct PackedFileInfo {
-        rel_path: PathBuf,
-        full_path: PathBuf,
-        size: u64,
-    }
-
     let mut files_to_write = Vec::new();
 
     for rel_path in &regular_files {
@@ -430,11 +423,7 @@ pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn
 
         insert_file_node(&mut root_files, &comps, node);
 
-        files_to_write.push(PackedFileInfo {
-            rel_path: rel_path.clone(),
-            full_path,
-            size,
-        });
+        files_to_write.push(full_path);
 
         current_offset += size;
         total_bytes += size;
@@ -463,7 +452,7 @@ pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn
     }
 
     for f in &files_to_write {
-        let file_bytes = fs::read(&f.full_path)?;
+        let file_bytes = fs::read(f)?;
         out.write_all(&file_bytes)?;
     }
     out.flush()?;

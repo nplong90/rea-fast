@@ -7,7 +7,7 @@ use crate::{
     graph,
     secrets::SecretScanner,
     sourcemap::SourceMapExtractor,
-    tauri::{TauriAuditResult, TauriScanner},
+    tauri::TauriScanner,
 };
 use ignore::WalkBuilder;
 use rayon::prelude::*;

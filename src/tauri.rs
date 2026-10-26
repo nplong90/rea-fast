@@ -1,10 +1,9 @@
 use regex::Regex;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::{
     error::Error,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::LazyLock,
 };
 
