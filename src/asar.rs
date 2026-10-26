@@ -334,6 +334,154 @@ impl AsarArchive {
 
 static EXTRACT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackResult {
+    pub asar_path: String,
+    pub total_files: usize,
+    pub total_bytes: u64,
+    pub asar_size: u64,
+    pub sha256: String,
+}
+
+fn insert_file_node(
+    files_map: &mut serde_json::Map<String, serde_json::Value>,
+    components: &[&str],
+    file_node: serde_json::Value,
+) {
+    if components.is_empty() {
+        return;
+    }
+    if components.len() == 1 {
+        files_map.insert(components[0].to_string(), file_node);
+    } else {
+        let dir_val = files_map
+            .entry(components[0].to_string())
+            .or_insert_with(|| serde_json::json!({ "files": {} }));
+        if let Some(sub_files) = dir_val.get_mut("files").and_then(|v| v.as_object_mut()) {
+            insert_file_node(sub_files, &components[1..], file_node);
+        }
+    }
+}
+
+pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn std::error::Error>> {
+    let canonical_src = src_dir.canonicalize()?;
+    if !canonical_src.is_dir() {
+        return Err("Source path must be a directory".into());
+    }
+
+    let mut regular_files = Vec::new();
+    for entry in ignore::WalkBuilder::new(&canonical_src)
+        .hidden(false)
+        .git_ignore(false)
+        .require_git(false)
+        .build()
+    {
+        let entry = entry?;
+        if entry.file_type().is_some_and(|ft| ft.is_file()) {
+            let rel = entry.path().strip_prefix(&canonical_src)?;
+            regular_files.push(rel.to_path_buf());
+        }
+    }
+
+    regular_files.sort();
+
+    let mut root_files = serde_json::Map::new();
+    let mut current_offset: u64 = 0;
+    let mut total_bytes: u64 = 0;
+
+    struct PackedFileInfo {
+        rel_path: PathBuf,
+        full_path: PathBuf,
+        size: u64,
+    }
+
+    let mut files_to_write = Vec::new();
+
+    for rel_path in &regular_files {
+        let full_path = canonical_src.join(rel_path);
+        let meta = fs::metadata(&full_path)?;
+        let size = meta.len();
+        let bytes = fs::read(&full_path)?;
+        let hash = format!("{:x}", Sha256::digest(&bytes));
+
+        let mut node = serde_json::json!({
+            "size": size,
+            "offset": current_offset.to_string(),
+            "integrity": {
+                "algorithm": "SHA256",
+                "hash": hash
+            }
+        });
+
+        #[cfg(unix)]
+        if meta.permissions().mode() & 0o111 != 0 {
+            if let Some(obj) = node.as_object_mut() {
+                obj.insert("executable".to_string(), serde_json::Value::Bool(true));
+            }
+        }
+
+        let comps: Vec<&str> = rel_path
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            })
+            .collect();
+
+        insert_file_node(&mut root_files, &comps, node);
+
+        files_to_write.push(PackedFileInfo {
+            rel_path: rel_path.clone(),
+            full_path,
+            size,
+        });
+
+        current_offset += size;
+        total_bytes += size;
+    }
+
+    let root_json = serde_json::json!({ "files": root_files });
+    let json_str = serde_json::to_string(&root_json)?;
+    let json_bytes = json_str.as_bytes();
+    let aligned_json = (json_bytes.len() + 3) / 4 * 4;
+    let header_size = (8 + aligned_json) as u32;
+
+    if let Some(parent) = dest_asar.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let mut out = File::create(dest_asar)?;
+    out.write_all(&4u32.to_le_bytes())?;
+    out.write_all(&header_size.to_le_bytes())?;
+    out.write_all(&(header_size - 4).to_le_bytes())?;
+    out.write_all(&(json_bytes.len() as u32).to_le_bytes())?;
+    out.write_all(json_bytes)?;
+
+    let padding_needed = (8 + header_size as usize).saturating_sub(16 + json_bytes.len());
+    if padding_needed > 0 {
+        out.write_all(&vec![0u8; padding_needed])?;
+    }
+
+    for f in &files_to_write {
+        let file_bytes = fs::read(&f.full_path)?;
+        out.write_all(&file_bytes)?;
+    }
+    out.flush()?;
+    drop(out);
+
+    let asar_bytes = fs::read(dest_asar)?;
+    let asar_size = asar_bytes.len() as u64;
+    let asar_sha256 = format!("{:x}", Sha256::digest(&asar_bytes));
+
+    Ok(PackResult {
+        asar_path: dest_asar.to_string_lossy().to_string(),
+        total_files: files_to_write.len(),
+        total_bytes,
+        asar_size,
+        sha256: asar_sha256,
+    })
+}
+
 pub fn extract_artifact(
     archive_path: &Path,
     output_dir: Option<&Path>,
@@ -463,5 +611,35 @@ mod tests {
 
         let _ = std::fs::remove_file(test_asar_path);
         let _ = std::fs::remove_dir_all(out_path);
+    }
+
+    #[test]
+    fn packs_and_unpacks_directory_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("rea_pack_test_{}", std::process::id()));
+        let src_dir = temp_dir.join("src");
+        let dest_asar = temp_dir.join("packed.asar");
+        let extract_dir = temp_dir.join("unpacked");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(src_dir.join("nested")).unwrap();
+
+        fs::write(src_dir.join("index.js"), b"console.log('root');").unwrap();
+        fs::write(src_dir.join("nested/util.js"), b"function helper() { return 42; }").unwrap();
+
+        let pack_res = pack_asar(&src_dir, &dest_asar).unwrap();
+        assert_eq!(pack_res.total_files, 2);
+        assert!(dest_asar.exists());
+
+        let archive = AsarArchive::open(&dest_asar).unwrap();
+        assert_eq!(archive.entries.len(), 2);
+
+        let ext_res = archive.extract_all(&extract_dir, IntegrityPolicy::Fail).unwrap();
+        assert_eq!(ext_res.total_files, 2);
+        assert_eq!(ext_res.contradictions.len(), 0);
+
+        assert_eq!(fs::read(extract_dir.join("index.js")).unwrap(), b"console.log('root');");
+        assert_eq!(fs::read(extract_dir.join("nested/util.js")).unwrap(), b"function helper() { return 42; }");
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

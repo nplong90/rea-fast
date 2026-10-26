@@ -5,7 +5,9 @@ use crate::{
     electron::{self, ElectronStaticFindings},
     fuses::{self, FuseReport, FuseState},
     graph,
+    secrets::SecretScanner,
     sourcemap::SourceMapExtractor,
+    tauri::{TauriAuditResult, TauriScanner},
 };
 use ignore::WalkBuilder;
 use rayon::prelude::*;
@@ -23,6 +25,7 @@ use std::{
 pub enum TargetKind {
     AsarArchive,
     ElectronBinary,
+    TauriBinary,
     SourceMap,
     JavaScriptBundle,
     SourceDirectory,
@@ -141,10 +144,13 @@ impl AuditPipeline {
             }
         }
 
-        // Check if executable / Electron binary
+        // Check if executable / Electron or Tauri binary
         if let Ok(bytes) = fs::read(path) {
             if bytes.windows(32).any(|w| w == b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX") {
                 return TargetKind::ElectronBinary;
+            }
+            if TauriScanner::detect_binary(&bytes).is_tauri {
+                return TargetKind::TauriBinary;
             }
         }
 
@@ -235,6 +241,37 @@ impl AuditPipeline {
                 fuse_report = Some(rep);
                 target_canonical.clone()
             }
+            TargetKind::TauriBinary => {
+                stages.push("tauri-binary-audit".to_string());
+                let tauri_dest = staging_dir.join("tauri_extracted");
+                let audit_res = TauriScanner::audit_path(&target_canonical, Some(&tauri_dest))?;
+                extracted_sources_count += audit_res.extracted_files.len();
+                for ipc in audit_res.ipc_findings {
+                    findings.push(PipelineFinding {
+                        category: "tauri-ipc".to_string(),
+                        severity: Severity::Info,
+                        title: format!("Tauri IPC {}: '{}'", ipc.kind, ipc.name),
+                        description: format!("Found Tauri {} call in binary or embedded scripts", ipc.kind),
+                        file: ipc.file,
+                        line: Some(ipc.line),
+                    });
+                }
+                if let Some(cfg) = audit_res.embedded_config {
+                    findings.push(PipelineFinding {
+                        category: "tauri-config".to_string(),
+                        severity: Severity::Info,
+                        title: "Tauri Embedded Config Recovered".to_string(),
+                        description: format!("Extracted embedded configuration: {}", cfg),
+                        file: Some(target_canonical.to_string_lossy().to_string()),
+                        line: None,
+                    });
+                }
+                if tauri_dest.exists() {
+                    tauri_dest
+                } else {
+                    target_canonical.clone()
+                }
+            }
             TargetKind::SourceDirectory => {
                 // If directory contains app.asar or fuses, check them
                 let asar_candidate = target_canonical.join("resources").join("app.asar");
@@ -314,6 +351,42 @@ impl AuditPipeline {
                 let el_findings =
                     electron::analyze_electron_source(&source, &p.to_string_lossy());
                 Self::translate_electron_findings(&el_findings, p, &mut findings);
+            }
+        }
+
+        // 4. STAGE: Secret Leak & API Endpoint Scanning
+        stages.push("secrets-and-endpoints-scan".to_string());
+        for p in &js_files {
+            if let Ok(source) = fs::read_to_string(p) {
+                let file_str = p.to_string_lossy().to_string();
+                let secret_res = SecretScanner::scan_str(&source, Some(&file_str));
+                for sec in secret_res.secrets {
+                    let sev = match sec.severity.as_str() {
+                        "CRITICAL" => Severity::Critical,
+                        "HIGH" => Severity::High,
+                        "MEDIUM" => Severity::Medium,
+                        "LOW" => Severity::Low,
+                        _ => Severity::Info,
+                    };
+                    findings.push(PipelineFinding {
+                        category: "credential-leak".to_string(),
+                        severity: sev,
+                        title: format!("{}: {}", sec.rule, sec.matched_masked),
+                        description: format!("High-entropy credential detected (SHA-256: {})", sec.sha256),
+                        file: sec.file,
+                        line: Some(sec.line),
+                    });
+                }
+                for ep in secret_res.endpoints {
+                    findings.push(PipelineFinding {
+                        category: "api-endpoint".to_string(),
+                        severity: Severity::Info,
+                        title: format!("{}: {}", ep.kind, ep.url_or_path),
+                        description: "Discovered exposed network URL or internal route".to_string(),
+                        file: ep.file,
+                        line: Some(ep.line),
+                    });
+                }
             }
         }
 
@@ -485,5 +558,32 @@ mod tests {
             AuditPipeline::detect_target(Path::new(".")),
             TargetKind::SourceDirectory
         ));
+    }
+
+    #[test]
+    fn test_pipeline_on_single_file_with_secrets() {
+        let temp_dir = std::env::temp_dir().join("rea_test_pipeline");
+        let _ = fs::create_dir_all(&temp_dir);
+        let src_file = temp_dir.join("vuln.js");
+        let content = r#"
+            const aws = "AKIA1234567890ABCDEF";
+            const api = "https://api.internal.corp/v1/auth";
+            const win = new BrowserWindow({
+                webPreferences: {
+                    nodeIntegration: true,
+                    contextIsolation: false
+                }
+            });
+        "#;
+        fs::write(&src_file, content).unwrap();
+
+        let report = AuditPipeline::run(&src_file, None).unwrap();
+        assert_eq!(report.overall_verdict, "CRITICAL_RISKS_DETECTED");
+        assert!(report.stages_executed.contains(&"secrets-and-endpoints-scan".to_string()));
+        assert!(report.findings.iter().any(|f| f.category == "credential-leak"));
+        assert!(report.findings.iter().any(|f| f.category == "api-endpoint"));
+        assert!(report.findings.iter().any(|f| f.category == "webPreferences"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

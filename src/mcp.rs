@@ -5,8 +5,10 @@ use crate::{
     diff::ApplicationDiffer,
     electron, fuses, graph,
     pipeline::AuditPipeline,
+    secrets::SecretScanner,
     semantics::{self, SemanticQuery},
     sourcemap::SourceMapExtractor,
+    tauri::TauriScanner,
     trace::{ApplicationFeatureTracer, FeatureSeed, TraceDirection},
 };
 use ignore::WalkBuilder;
@@ -503,6 +505,59 @@ fn tool_list() -> Value {
                     },
                     "required": ["target_path"]
                 }
+            },
+            {
+                "name": "pack_asar",
+                "description": "Pack a directory of files into a Chromium Pickle ASAR archive with SHA-256 block hashing.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_directory": {
+                            "type": "string",
+                            "description": "Directory containing files to pack"
+                        },
+                        "output_path": {
+                            "type": "string",
+                            "description": "Output path for the destination .asar file"
+                        }
+                    },
+                    "required": ["source_directory", "output_path"]
+                }
+            },
+            {
+                "name": "scan_secrets",
+                "description": "Scan source code or file/directory for high-entropy credentials, tokens, private keys, and API route endpoints with masking.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Optional local file or directory path to scan"
+                        },
+                        "source": {
+                            "type": "string",
+                            "description": "Optional source code string to scan directly"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "audit_tauri",
+                "description": "Audit Tauri desktop binary for framework signals, embedded tauri.conf.json, extracted web assets, and IPC command calls.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to Tauri executable binary or app bundle"
+                        },
+                        "output_directory": {
+                            "type": "string",
+                            "description": "Optional directory to extract embedded HTML/Brotli assets"
+                        }
+                    },
+                    "required": ["path"]
+                }
             }
         ]
     })
@@ -704,6 +759,64 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "pack_asar" => {
+            let src_str = args
+                .get("source_directory")
+                .or_else(|| args.get("src"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'source_directory' argument".to_string())?;
+            let out_str = args
+                .get("output_path")
+                .or_else(|| args.get("dest"))
+                .or_else(|| args.get("output"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'output_path' argument".to_string())?;
+            let report = asar::pack_asar(Path::new(src_str), Path::new(out_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(report).map_err(|e| e.to_string())
+        }
+        "scan_secrets" => {
+            if let Some(src) = args.get("source").and_then(|v| v.as_str()) {
+                let file_path = args.get("path").and_then(|v| v.as_str());
+                let res = SecretScanner::scan_str(src, file_path);
+                serde_json::to_value(res).map_err(|e| e.to_string())
+            } else if let Some(path_str) = args.get("path").and_then(|v| v.as_str()) {
+                let path = Path::new(path_str);
+                if path.is_file() {
+                    let res = SecretScanner::scan_file(path).map_err(|e| e.to_string())?;
+                    serde_json::to_value(res).map_err(|e| e.to_string())
+                } else if path.is_dir() {
+                    let files = collect_files(path).map_err(|e| e.to_string())?;
+                    let mut all_res = crate::secrets::SecretScanResult::default();
+                    for f in files {
+                        if let Ok(res) = SecretScanner::scan_file(&f) {
+                            all_res.secrets.extend(res.secrets);
+                            all_res.endpoints.extend(res.endpoints);
+                        }
+                    }
+                    all_res.total_secrets = all_res.secrets.len();
+                    all_res.total_endpoints = all_res.endpoints.len();
+                    serde_json::to_value(all_res).map_err(|e| e.to_string())
+                } else {
+                    Err(format!("Path not found: {path_str}"))
+                }
+            } else {
+                Err("Missing either 'path' or 'source' argument".to_string())
+            }
+        }
+        "audit_tauri" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let extract_to = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .map(Path::new);
+            let res = TauriScanner::audit_path(Path::new(path_str), extract_to)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -840,7 +953,7 @@ mod tests {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(list.len(), 12);
+        assert_eq!(list.len(), 15);
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -853,6 +966,9 @@ mod tests {
         assert!(names.contains(&"trace_javascript_semantics"));
         assert!(names.contains(&"extract_sourcemap"));
         assert!(names.contains(&"run_audit_pipeline"));
+        assert!(names.contains(&"pack_asar"));
+        assert!(names.contains(&"scan_secrets"));
+        assert!(names.contains(&"audit_tauri"));
     }
 
     #[test]

@@ -18,8 +18,11 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
-  - Full CLI with 11 subcommands.
-  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 10 RE tools.
+  - Full CLI with 14 subcommands.
+  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 15 RE tools.
+- **Chromium Pickle ASAR Repacker**: Pack directory into standard ASAR archive with 512 KiB block-level SHA-256 integrity hashing and 4-byte pickle alignment.
+- **High-Entropy Secrets & API Discovery**: Scans codebases for leaked tokens (AWS, GitHub, Slack, Stripe, JWT, Private Keys) with non-leaking redaction and discovers API route endpoints.
+- **Tauri Application Auditor**: Fingerprint v1/v2 Tauri desktop binaries, extract embedded `tauri.conf.json` via balanced-brace slice parser, recover embedded HTML/Brotli assets, and audit `invoke`/`listen`/`emit` IPC commands.
 
 ---
 
@@ -91,7 +94,28 @@ Extract original source trees from `.map` files or inline base64 comments:
 rea-fast sourcemap bundle.js.map -o ./extracted_sources
 ```
 
-### 9. Automated Audit Pipeline
+### 9. ASAR Archive Packing
+Pack a folder into a Chromium Pickle ASAR archive with block hashing:
+```bash
+rea-fast pack-asar ./src_dir ./output.asar
+```
+
+### 10. High-Entropy Secret & Endpoint Scanning
+Scan code or directories for leaked API credentials and API endpoints:
+```bash
+# Scan folder or file
+rea-fast secrets ./src
+# Scan inline string
+rea-fast secrets --source 'const token = "AKIA1234567890ABCDEF";'
+```
+
+### 11. Tauri Application Audit
+Audit Tauri binaries for framework signatures, embedded config, and IPC calls:
+```bash
+rea-fast audit-tauri /path/to/tauri_app -o ./extracted_assets
+```
+
+### 12. Automated Audit Pipeline
 Execute complete multi-stage automated audit on any target (ASAR, binary, bundle, or source tree):
 ```bash
 rea-fast audit /path/to/app.asar -o ./audit_workspace
@@ -135,6 +159,9 @@ rea-fast mcp
 10. `analyze_electron_source`: IPC and webPreferences anti-pattern audit.
 11. `extract_sourcemap`: Extract `sourcesContent` from SourceMap v3 or inline data URIs.
 12. `run_audit_pipeline`: End-to-end multi-stage automated security audit and metrics pipeline.
+13. `pack_asar`: Pack a directory into a Chromium Pickle ASAR archive with SHA-256 block hashing.
+14. `scan_secrets`: Scan source code or files for high-entropy credentials, tokens, and API endpoints with masking.
+15. `audit_tauri`: Audit Tauri desktop binaries for framework signals, embedded config, assets, and IPC calls.
 
 ---
 

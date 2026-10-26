@@ -7,8 +7,10 @@ mod fuses;
 mod graph;
 mod mcp;
 pub mod pipeline;
+pub mod secrets;
 pub mod semantics;
 pub mod sourcemap;
+pub mod tauri;
 pub mod trace;
 
 use clap::{Parser, ValueEnum};
@@ -135,6 +137,23 @@ enum Commands {
     },
     /// Run automated end-to-end security audit pipeline on target
     Audit {
+        path: PathBuf,
+        #[arg(short, long)]
+        output_dir: Option<PathBuf>,
+    },
+    /// Pack a directory of files into a Chromium Pickle ASAR archive with SHA-256 block hashing
+    PackAsar {
+        src_dir: PathBuf,
+        output: PathBuf,
+    },
+    /// Scan files, directory, or inline string for high-entropy secrets and exposed API endpoints
+    Secrets {
+        path: Option<PathBuf>,
+        #[arg(long)]
+        source: Option<String>,
+    },
+    /// Audit Tauri desktop binary for framework signals, embedded config, assets, and IPC calls
+    AuditTauri {
         path: PathBuf,
         #[arg(short, long)]
         output_dir: Option<PathBuf>,
@@ -424,6 +443,32 @@ fn run() -> Result<(), Box<dyn Error>> {
                     args["output_directory"] = json!(out.to_string_lossy());
                 }
                 print_tool_result(mcp::handle_tool_call("run_audit_pipeline", &args))
+            }
+            Commands::PackAsar { src_dir, output } => {
+                let args = json!({
+                    "source_directory": src_dir.to_string_lossy(),
+                    "output_path": output.to_string_lossy(),
+                });
+                print_tool_result(mcp::handle_tool_call("pack_asar", &args))
+            }
+            Commands::Secrets { path, source } => {
+                let mut args = json!({});
+                if let Some(p) = path {
+                    args["path"] = json!(p.to_string_lossy());
+                }
+                if let Some(s) = source {
+                    args["source"] = json!(s);
+                }
+                print_tool_result(mcp::handle_tool_call("scan_secrets", &args))
+            }
+            Commands::AuditTauri { path, output_dir } => {
+                let mut args = json!({
+                    "path": path.to_string_lossy(),
+                });
+                if let Some(out) = output_dir {
+                    args["output_directory"] = json!(out.to_string_lossy());
+                }
+                print_tool_result(mcp::handle_tool_call("audit_tauri", &args))
             }
         }
     } else if let Some(path) = cli.path {
