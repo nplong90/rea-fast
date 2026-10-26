@@ -4,7 +4,9 @@ use crate::{
     bundle::{ExtractionMode, RewriteLevel, SourceRecoverer},
     diff::ApplicationDiffer,
     electron, fuses, graph,
+    pipeline::AuditPipeline,
     semantics::{self, SemanticQuery},
+    sourcemap::SourceMapExtractor,
     trace::{ApplicationFeatureTracer, FeatureSeed, TraceDirection},
 };
 use ignore::WalkBuilder;
@@ -465,6 +467,42 @@ fn tool_list() -> Value {
                     },
                     "required": ["application", "query"]
                 }
+            },
+            {
+                "name": "extract_sourcemap",
+                "description": "Extract sourcesContent from SourceMap v3 JSON file, inline data URI, or referenced .map into an output directory.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to JS/TS file with sourcemap or standalone .map file"
+                        },
+                        "output_directory": {
+                            "type": "string",
+                            "description": "Directory to write extracted original sources"
+                        }
+                    },
+                    "required": ["path", "output_directory"]
+                }
+            },
+            {
+                "name": "run_audit_pipeline",
+                "description": "Run automated end-to-end security audit pipeline on ASAR, Electron binary, bundle, or source tree.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "target_path": {
+                            "type": "string",
+                            "description": "Path to target file or directory"
+                        },
+                        "output_directory": {
+                            "type": "string",
+                            "description": "Optional custom staging output directory"
+                        }
+                    },
+                    "required": ["target_path"]
+                }
             }
         ]
     })
@@ -639,6 +677,33 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             let res = graph.trace(&query);
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "extract_sourcemap" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let out_dir_str = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'output_directory' argument".to_string())?;
+            let res = SourceMapExtractor::extract(Path::new(path_str), Path::new(out_dir_str))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
+        "run_audit_pipeline" => {
+            let target_str = args
+                .get("target_path")
+                .or_else(|| args.get("path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'target_path' or 'path' argument".to_string())?;
+            let out_dir = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .map(Path::new);
+            let res = AuditPipeline::run(Path::new(target_str), out_dir)
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(res).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -775,7 +840,7 @@ mod tests {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(list.len(), 10);
+        assert_eq!(list.len(), 12);
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -786,6 +851,8 @@ mod tests {
         assert!(names.contains(&"compare_javascript_export_shapes"));
         assert!(names.contains(&"trace_application_feature"));
         assert!(names.contains(&"trace_javascript_semantics"));
+        assert!(names.contains(&"extract_sourcemap"));
+        assert!(names.contains(&"run_audit_pipeline"));
     }
 
     #[test]

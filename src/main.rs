@@ -6,7 +6,9 @@ mod electron;
 mod fuses;
 mod graph;
 mod mcp;
+pub mod pipeline;
 pub mod semantics;
+pub mod sourcemap;
 pub mod trace;
 
 use clap::{Parser, ValueEnum};
@@ -124,6 +126,18 @@ enum Commands {
         path: PathBuf,
         #[arg(long)]
         source: Option<String>,
+    },
+    /// Extract sourcesContent from a SourceMap v3 file or inline data URI
+    Sourcemap {
+        path: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+    },
+    /// Run automated end-to-end security audit pipeline on target
+    Audit {
+        path: PathBuf,
+        #[arg(short, long)]
+        output_dir: Option<PathBuf>,
     },
 }
 
@@ -394,6 +408,22 @@ fn run() -> Result<(), Box<dyn Error>> {
                     args["source"] = json!(src);
                 }
                 print_tool_result(mcp::handle_tool_call("analyze_electron_source", &args))
+            }
+            Commands::Sourcemap { path, output_dir } => {
+                let args = json!({
+                    "path": path.to_string_lossy(),
+                    "output_directory": output_dir.to_string_lossy(),
+                });
+                print_tool_result(mcp::handle_tool_call("extract_sourcemap", &args))
+            }
+            Commands::Audit { path, output_dir } => {
+                let mut args = json!({
+                    "target_path": path.to_string_lossy(),
+                });
+                if let Some(out) = output_dir {
+                    args["output_directory"] = json!(out.to_string_lossy());
+                }
+                print_tool_result(mcp::handle_tool_call("run_audit_pipeline", &args))
             }
         }
     } else if let Some(path) = cli.path {

@@ -85,6 +85,18 @@ Scan Electron codebase for IPC risks and dangerous configurations:
 rea-fast analyze-electron ./src
 ```
 
+### 8. SourceMap v3 Reconstruction
+Extract original source trees from `.map` files or inline base64 comments:
+```bash
+rea-fast sourcemap bundle.js.map -o ./extracted_sources
+```
+
+### 9. Automated Audit Pipeline
+Execute complete multi-stage automated audit on any target (ASAR, binary, bundle, or source tree):
+```bash
+rea-fast audit /path/to/app.asar -o ./audit_workspace
+```
+
 ---
 
 ## Model Context Protocol (MCP) Integration
@@ -121,6 +133,8 @@ rea-fast mcp
 8. `trace_application_feature`: Multi-hop dependency and symbol reachability.
 9. `trace_javascript_semantics`: Call graph and closure data-flow tracing.
 10. `analyze_electron_source`: IPC and webPreferences anti-pattern audit.
+11. `extract_sourcemap`: Extract `sourcesContent` from SourceMap v3 or inline data URIs.
+12. `run_audit_pipeline`: End-to-end multi-stage automated security audit and metrics pipeline.
 
 ---
 
