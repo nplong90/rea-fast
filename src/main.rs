@@ -2,6 +2,7 @@ mod analyze;
 mod asar;
 pub mod bundle;
 pub mod diff;
+pub mod dynamic_bridge;
 mod electron;
 mod fuses;
 mod graph;
@@ -188,6 +189,39 @@ enum Commands {
     /// Inspect PCAP / PCAPNG packet captures (protocols, IP/port sets, packet counts)
     InspectPcap {
         path: PathBuf,
+    },
+    /// List targets from loopback Chrome/Electron CDP endpoint
+    ListCdpTargets {
+        #[arg(long, default_value = "http://127.0.0.1:9222")]
+        endpoint: String,
+    },
+    /// List Electron page/app targets from loopback CDP endpoint
+    ListElectronTargets {
+        #[arg(long, default_value = "http://127.0.0.1:9222")]
+        endpoint: String,
+    },
+    /// List connected Android devices and emulators via adb
+    ListAdbDevices,
+    /// Inspect Android device properties, model, ABI, and emulator status
+    InspectAdbDevice {
+        #[arg(short, long)]
+        serial: Option<String>,
+    },
+    /// List installed Android packages on device
+    ListAdbPackages {
+        #[arg(short, long)]
+        serial: Option<String>,
+        #[arg(long)]
+        third_party: bool,
+    },
+    /// List live host processes with PID, comm name, and cmdline
+    ListProcesses {
+        #[arg(short, long)]
+        filter: Option<String>,
+    },
+    /// Inspect detailed live host process state, memory, threads, and mapped libraries
+    InspectProcess {
+        pid: u32,
     },
 }
 
@@ -528,6 +562,43 @@ fn run() -> Result<(), Box<dyn Error>> {
             Commands::InspectPcap { path } => {
                 let args = json!({ "path": path.to_string_lossy() });
                 print_tool_result(mcp::handle_tool_call("inspect_packet_capture", &args))
+            }
+            Commands::ListCdpTargets { endpoint } => {
+                let args = json!({ "cdp_endpoint": endpoint });
+                print_tool_result(mcp::handle_tool_call("list_browser_targets", &args))
+            }
+            Commands::ListElectronTargets { endpoint } => {
+                let args = json!({ "cdp_endpoint": endpoint });
+                print_tool_result(mcp::handle_tool_call("list_electron_targets", &args))
+            }
+            Commands::ListAdbDevices => {
+                let args = json!({});
+                print_tool_result(mcp::handle_tool_call("list_adb_devices", &args))
+            }
+            Commands::InspectAdbDevice { serial } => {
+                let mut args = json!({});
+                if let Some(s) = serial {
+                    args["serial"] = json!(s);
+                }
+                print_tool_result(mcp::handle_tool_call("inspect_adb_device", &args))
+            }
+            Commands::ListAdbPackages { serial, third_party } => {
+                let mut args = json!({ "third_party_only": third_party });
+                if let Some(s) = serial {
+                    args["serial"] = json!(s);
+                }
+                print_tool_result(mcp::handle_tool_call("list_adb_packages", &args))
+            }
+            Commands::ListProcesses { filter } => {
+                let mut args = json!({});
+                if let Some(f) = filter {
+                    args["filter"] = json!(f);
+                }
+                print_tool_result(mcp::handle_tool_call("list_live_processes", &args))
+            }
+            Commands::InspectProcess { pid } => {
+                let args = json!({ "pid": pid });
+                print_tool_result(mcp::handle_tool_call("inspect_live_process", &args))
             }
         }
     } else if let Some(path) = cli.path {

@@ -18,8 +18,8 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
-  - Full CLI with 21 subcommands.
-  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 22 RE tools.
+  - Full CLI with 28 subcommands.
+  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 29 RE tools.
 - **Chromium Pickle ASAR Repacker**: Pack directory into standard ASAR archive with 512 KiB block-level SHA-256 integrity hashing and 4-byte pickle alignment.
 - **High-Entropy Secrets & API Discovery**: Scans codebases for leaked tokens (AWS, GitHub, Slack, Stripe, JWT, Private Keys) with non-leaking redaction and discovers API route endpoints.
 - **Tauri Application Auditor**: Fingerprint v1/v2 Tauri desktop binaries, extract embedded `tauri.conf.json` via balanced-brace slice parser, recover embedded HTML/Brotli assets, and audit `invoke`/`listen`/`emit` IPC commands.
@@ -30,6 +30,7 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **Android APK & AXML Dissector**: In-tree zero-dependency ZIP parser, DEX hashing, native library catalog, and AXML string pool extraction for permissions, activities, and services.
 - **SQLite Database Inspector**: Zero-execution SQLite format 3 verification, page size, change counter, and schema DDL extraction.
 - **Network PCAP/PCAPNG Dissector**: Header and packet dissection for standard/nanosecond PCAP and PCAPNG, extracting IPv4, IPv6, TCP, UDP, ICMP, and port lists.
+- **Dynamic Runtime & Bridge Introspection**: Zero-dependency raw TCP Chrome/Electron CDP client, Android ADB device/properties/package inspection with emulator heuristics, and host `/proc` memory/thread/library live inspection.
 
 ---
 
@@ -170,6 +171,28 @@ Dissect PCAP/PCAPNG packets, endpoints, ports, and protocol distributions:
 rea-fast inspect-pcap /path/to/capture.pcap
 ```
 
+### 20. Chrome / Electron CDP Target Discovery
+Query loopback Chrome or Electron CDP endpoints:
+```bash
+rea-fast list-cdp-targets --endpoint http://127.0.0.1:9222
+rea-fast list-electron-targets --endpoint http://127.0.0.1:9222
+```
+
+### 21. Android ADB Device & Package Inspection
+Inspect connected devices, system properties, and installed packages via ADB:
+```bash
+rea-fast list-adb-devices
+rea-fast inspect-adb-device --serial emulator-5554
+rea-fast list-adb-packages --third-party
+```
+
+### 22. Live Host Process & Memory Introspection
+Inspect host processes, memory metrics (VmRSS/VmSize), thread counts, and mapped `.so` libraries:
+```bash
+rea-fast list-processes --filter electron
+rea-fast inspect-process 12345
+```
+
 ---
 
 ## Model Context Protocol (MCP) Integration
@@ -218,6 +241,13 @@ rea-fast mcp
 20. `inspect_android_package`: Dissect APK packages, hash DEX executables, catalog native libs, and extract AXML permissions.
 21. `inspect_sqlite_database`: Verify SQLite format 3 headers, page sizes, schema cookies, and DDL table definitions.
 22. `inspect_packet_capture`: Dissect PCAP/PCAPNG traffic, extract IPv4/IPv6 endpoints, TCP/UDP ports, and protocol distributions.
+23. `list_browser_targets`: List loopback Chrome CDP page targets.
+24. `list_electron_targets`: List loopback Electron file:// and app webview targets.
+25. `list_adb_devices`: List connected Android devices via `adb devices -l`.
+26. `inspect_adb_device`: Read device properties and detect emulator status via `getprop`.
+27. `list_adb_packages`: List installed packages on target Android device.
+28. `list_live_processes`: List host processes with cmdline and PID filtering.
+29. `inspect_live_process`: Detailed Linux `/proc/[pid]` status, memory usage, threads, and mapped `.so` libraries.
 
 ---
 

@@ -3,6 +3,7 @@ use crate::{
     asar::{self, AsarArchive, IntegrityPolicy},
     bundle::{ExtractionMode, RewriteLevel, SourceRecoverer},
     diff::ApplicationDiffer,
+    dynamic_bridge::DynamicBridge,
     electron, fuses, graph,
     mobile::MobileInspector,
     native_binary::NativeInspector,
@@ -659,6 +660,97 @@ fn tool_list() -> Value {
                     },
                     "required": ["path"]
                 }
+            },
+            {
+                "name": "list_browser_targets",
+                "description": "List page and debugger targets exposed by loopback Chrome/Electron CDP endpoint (e.g. http://127.0.0.1:9222).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cdp_endpoint": {
+                            "type": "string",
+                            "description": "Loopback CDP endpoint URL (default: http://127.0.0.1:9222)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "list_electron_targets",
+                "description": "List Electron file:// and app page targets from loopback CDP endpoint.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "cdp_endpoint": {
+                            "type": "string",
+                            "description": "Loopback CDP endpoint URL (default: http://127.0.0.1:9222)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "list_adb_devices",
+                "description": "List connected Android devices, emulators, and transport IDs via adb.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "inspect_adb_device",
+                "description": "Inspect Android system properties, SDK version, model, ABI, and emulator status via getprop.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {
+                            "type": "string",
+                            "description": "Optional device serial number"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "list_adb_packages",
+                "description": "List installed package names on connected Android device.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "serial": {
+                            "type": "string",
+                            "description": "Optional device serial number"
+                        },
+                        "third_party_only": {
+                            "type": "boolean",
+                            "description": "Filter to third-party packages only (-3)"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "list_live_processes",
+                "description": "List live running processes on host system with PID, comm name, and cmdline.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "filter": {
+                            "type": "string",
+                            "description": "Optional substring filter for process name or cmdline"
+                        }
+                    }
+                }
+            },
+            {
+                "name": "inspect_live_process",
+                "description": "Inspect detailed host process state: command line arguments, executable path, memory footprint (VmSize/VmRSS), thread count, and loaded dynamic libraries.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "pid": {
+                            "type": "integer",
+                            "description": "Process ID (PID) to inspect"
+                        }
+                    },
+                    "required": ["pid"]
+                }
             }
         ]
     })
@@ -981,6 +1073,56 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "list_browser_targets" => {
+            let endpoint = args
+                .get("cdp_endpoint")
+                .or_else(|| args.get("endpoint"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://127.0.0.1:9222");
+            let targets = DynamicBridge::query_cdp_targets(endpoint).map_err(|e| e.to_string())?;
+            serde_json::to_value(targets).map_err(|e| e.to_string())
+        }
+        "list_electron_targets" => {
+            let endpoint = args
+                .get("cdp_endpoint")
+                .or_else(|| args.get("endpoint"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("http://127.0.0.1:9222");
+            let targets = DynamicBridge::list_electron_targets(endpoint).map_err(|e| e.to_string())?;
+            serde_json::to_value(targets).map_err(|e| e.to_string())
+        }
+        "list_adb_devices" => {
+            let devices = DynamicBridge::list_adb_devices().map_err(|e| e.to_string())?;
+            serde_json::to_value(devices).map_err(|e| e.to_string())
+        }
+        "inspect_adb_device" => {
+            let serial = args.get("serial").and_then(|v| v.as_str());
+            let props = DynamicBridge::inspect_adb_device(serial).map_err(|e| e.to_string())?;
+            serde_json::to_value(props).map_err(|e| e.to_string())
+        }
+        "list_adb_packages" => {
+            let serial = args.get("serial").and_then(|v| v.as_str());
+            let third_party = args
+                .get("third_party_only")
+                .and_then(|v| v.as_bool())
+                .or_else(|| args.get("scope").and_then(|v| v.as_str()).map(|s| s == "third_party"))
+                .unwrap_or(false);
+            let pkgs = DynamicBridge::list_adb_packages(serial, third_party).map_err(|e| e.to_string())?;
+            serde_json::to_value(pkgs).map_err(|e| e.to_string())
+        }
+        "list_live_processes" => {
+            let filter = args.get("filter").and_then(|v| v.as_str());
+            let procs = DynamicBridge::list_live_processes(filter).map_err(|e| e.to_string())?;
+            serde_json::to_value(procs).map_err(|e| e.to_string())
+        }
+        "inspect_live_process" => {
+            let pid = args
+                .get("pid")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| "Missing 'pid' argument".to_string())? as u32;
+            let detail = DynamicBridge::inspect_live_process(pid).map_err(|e| e.to_string())?;
+            serde_json::to_value(detail).map_err(|e| e.to_string())
+        }
         _ => Err(format!("Unknown tool: {name}")),
     }
 }
@@ -1117,7 +1259,7 @@ mod tests {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(list.len(), 22);
+        assert_eq!(list.len(), 29);
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -1135,6 +1277,18 @@ mod tests {
         assert!(names.contains(&"audit_tauri"));
         assert!(names.contains(&"inspect_binary_layout"));
         assert!(names.contains(&"inspect_go_binary"));
+        assert!(names.contains(&"inspect_rust_binary"));
+        assert!(names.contains(&"inspect_wasm_artifact"));
+        assert!(names.contains(&"inspect_android_package"));
+        assert!(names.contains(&"inspect_sqlite_database"));
+        assert!(names.contains(&"inspect_packet_capture"));
+        assert!(names.contains(&"list_browser_targets"));
+        assert!(names.contains(&"list_electron_targets"));
+        assert!(names.contains(&"list_adb_devices"));
+        assert!(names.contains(&"inspect_adb_device"));
+        assert!(names.contains(&"list_adb_packages"));
+        assert!(names.contains(&"list_live_processes"));
+        assert!(names.contains(&"inspect_live_process"));
         assert!(names.contains(&"inspect_rust_binary"));
         assert!(names.contains(&"inspect_wasm_artifact"));
         assert!(names.contains(&"inspect_android_package"));
