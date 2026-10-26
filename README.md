@@ -18,8 +18,21 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
-  - Full CLI with 28 subcommands.
-  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`) exposing 29 RE tools.
+  - Full CLI with 45 subcommands.
+  - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`):
+    - **Core Profile (default)**: Exposes 43 lean native RE tools (~31 KB payload, ~7.7k tokens) designed for ultra-lean context windows, completely preventing prompt overflows and autocompact thrashing.
+    - **Dynamic Discovery & Execution**: Built-in meta-tools (`rea_search_tools`, `rea_execute_tool`) allow on-demand parameter discovery and execution of the complete 245-tool catalog without flooding the LLM context.
+    - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose the entire 245-tool catalog (sanitized & minified to ~195 KB, stripping redundant `outputSchema`).
+  - 100% standalone and independent: zero Node.js/npm runtime dependencies.
+  - Compile-time gzip schema ingestion (~316 KB embedded) with lazy runtime decompression (<2ms).
+  - Raw TCP socket driver (20ms timeout) and structured diagnostic routing with native fallbacks for offline proprietary disassemblers (JEB, Ghidra, Hopper).
+- **Evidence DAG & RFC 8785 Ledger**: Canonical deterministic JSON digesting (`RFC 8785`), in-memory SHA-256 evidence store, residual Unknowns lifecycle tracking, obligation ledgers, and bundle export/import.
+- **Apple & Harmony Graph Projectors**: Binary `bplist00` and XML plist parser, NSKeyedArchiver deserializer, and dependency graph projection for macOS/iOS `.app` bundles and OpenHarmony HAP applications.
+- **ECMA-335 .NET Managed CLI & IL2CPP Inspector**: Parses BSJB header, `#~` metadata stream, `#Strings`, `#US`, CIL `ldstr` string scanning, and Unity IL2CPP `global-metadata.dat`.
+- **Stateful Debugger MI3 Sessions**: Persistent child process manager for GDB MI3, Rizin, and Frida with background thread pipe draining and non-blocking command execution.
+- **Chrome & Electron CDP Client**: Native zero-dependency TCP/HTTP DevTools Protocol client for targets, DOM/CSS inspection, runtime evaluation, and screenshots.
+- **Universal Artifact & Model Inspector**: Single universal entry point (`inspect_artifact`) detecting ASAR, APK, SQLite, PCAP, Plist, ELF, Mach-O, PE, and WASM; ML model inspector for GGUF, SafeTensors, and TFLite; and Shannon byte-entropy chunk analysis.
+- **Flutter Framework & APK Signature Scheme**: Detects Flutter AOT vs JIT builds (`libapp.so`, `libflutter.so`, assets) and inspects APK v1 JAR signatures and v2/v3 signing blocks.
 - **Chromium Pickle ASAR Repacker**: Pack directory into standard ASAR archive with 512 KiB block-level SHA-256 integrity hashing and 4-byte pickle alignment.
 - **High-Entropy Secrets & API Discovery**: Scans codebases for leaked tokens (AWS, GitHub, Slack, Stripe, JWT, Private Keys) with non-leaking redaction and discovers API route endpoints.
 - **Tauri Application Auditor**: Fingerprint v1/v2 Tauri desktop binaries, extract embedded `tauri.conf.json` via balanced-brace slice parser, recover embedded HTML/Brotli assets, and audit `invoke`/`listen`/`emit` IPC commands.
@@ -31,6 +44,7 @@ High-performance, zero-execution reverse-engineering engine and static analysis 
 - **SQLite Database Inspector**: Zero-execution SQLite format 3 verification, page size, change counter, and schema DDL extraction.
 - **Network PCAP/PCAPNG Dissector**: Header and packet dissection for standard/nanosecond PCAP and PCAPNG, extracting IPv4, IPv6, TCP, UDP, ICMP, and port lists.
 - **Dynamic Runtime & Bridge Introspection**: Zero-dependency raw TCP Chrome/Electron CDP client, Android ADB device/properties/package inspection with emulator heuristics, and host `/proc` memory/thread/library live inspection.
+- **Optional External Tool Bridges**: Safe dynamic PATH detection, strict timeout enforcement, and deadlock-free pipe draining for optional CLI tools (`gdb`, `frida`, `objdump`, `rizin`, `sigrok-cli`, `jadx`/`apktool`) with graceful diagnostic fallback.
 
 ---
 
@@ -193,6 +207,17 @@ rea-fast list-processes --filter electron
 rea-fast inspect-process 12345
 ```
 
+### 23. Optional External Tool Bridges
+Execute external CLI utilities with automatic PATH discovery, timeout enforcement, and diagnostic fallbacks:
+```bash
+rea-fast gdb -- --version
+rea-fast frida -- --version
+rea-fast objdump -- -d ./binary
+rea-fast rizin -- -v
+rea-fast sigrok -- -V
+rea-fast decompile-android -- app.apk
+```
+
 ---
 
 ## Model Context Protocol (MCP) Integration
@@ -248,6 +273,12 @@ rea-fast mcp
 27. `list_adb_packages`: List installed packages on target Android device.
 28. `list_live_processes`: List host processes with cmdline and PID filtering.
 29. `inspect_live_process`: Detailed Linux `/proc/[pid]` status, memory usage, threads, and mapped `.so` libraries.
+30. `execute_gdb`: Execute GDB commands with timeout and graceful PATH fallback.
+31. `execute_frida`: Run Frida instrumentation CLI with graceful degradation.
+32. `inspect_with_objdump`: Disassemble or inspect headers via host GNU objdump.
+33. `execute_rizin`: Run Rizin commands with timeout bounds.
+34. `decode_signal_sigrok`: Decode signal recordings via `sigrok-cli`.
+35. `decompile_apktool_jadx`: Decompile Android packages via JADX or Apktool fallback.
 
 ---
 

@@ -1,13 +1,16 @@
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
+    env,
     error::Error,
     fs,
     io::{Read, Write},
     net::TcpStream,
-    path::Path,
-    process::Command,
-    time::Duration,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +454,151 @@ impl DynamicBridge {
             })
         }
     }
+
+    // ==========================================
+    // Optional External CLI Bridges
+    // ==========================================
+
+    pub fn find_in_path(bin: &str) -> Option<PathBuf> {
+        env::var_os("PATH").and_then(|paths| {
+            env::split_paths(&paths)
+                .map(|p| p.join(bin))
+                .find(|p| p.is_file())
+        })
+    }
+
+    pub fn run_optional_bridge(
+        bin: &str,
+        install_hint: &str,
+        args: &[&str],
+        timeout_secs: u64,
+    ) -> Value {
+        let bin_path = match Self::find_in_path(bin) {
+            Some(p) => p,
+            None => {
+                return json!({
+                    "status": "unavailable",
+                    "tool": bin,
+                    "install_hint": install_hint
+                });
+            }
+        };
+
+        let mut child = match Command::new(&bin_path)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return json!({
+                    "status": "error",
+                    "tool": bin,
+                    "error": e.to_string()
+                });
+            }
+        };
+
+        let mut stdout_handle = child.stdout.take();
+        let mut stderr_handle = child.stderr.take();
+
+        let stdout_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut stream) = stdout_handle.take() {
+                let _ = stream.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        let stderr_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut stream) = stderr_handle.take() {
+                let _ = stream.read_to_end(&mut buf);
+            }
+            buf
+        });
+
+        let start = Instant::now();
+        let timeout = Duration::from_secs(timeout_secs);
+        let mut timed_out = false;
+
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(s)) => break Ok(s),
+                Ok(None) => {
+                    if start.elapsed() >= timeout {
+                        let _ = child.kill();
+                        timed_out = true;
+                        break child.wait();
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(e) => break Err(e),
+            }
+        };
+
+        let stdout_bytes = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+
+        let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+
+        if timed_out {
+            return json!({
+                "status": "timeout",
+                "tool": bin,
+                "timeout_secs": timeout_secs,
+                "stdout": stdout,
+                "stderr": stderr
+            });
+        }
+
+        match status {
+            Ok(exit_status) => json!({
+                "status": "ok",
+                "tool": bin,
+                "exit_code": exit_status.code(),
+                "stdout": stdout,
+                "stderr": stderr
+            }),
+            Err(e) => json!({
+                "status": "error",
+                "tool": bin,
+                "error": e.to_string(),
+                "stdout": stdout,
+                "stderr": stderr
+            }),
+        }
+    }
+
+    pub fn run_gdb(args: &[&str]) -> Value {
+        Self::run_optional_bridge("gdb", "apt install gdb || brew install gdb", args, 10)
+    }
+
+    pub fn run_frida(args: &[&str]) -> Value {
+        Self::run_optional_bridge("frida", "pip install frida-tools", args, 10)
+    }
+
+    pub fn run_objdump(args: &[&str]) -> Value {
+        Self::run_optional_bridge("objdump", "apt install binutils || brew install binutils", args, 10)
+    }
+
+    pub fn run_rizin(args: &[&str]) -> Value {
+        Self::run_optional_bridge("rizin", "apt install rizin || https://github.com/rizinorg/rizin", args, 10)
+    }
+
+    pub fn run_sigrok(args: &[&str]) -> Value {
+        Self::run_optional_bridge("sigrok-cli", "apt install sigrok-cli", args, 10)
+    }
+
+    pub fn run_jadx_or_apktool(args: &[&str]) -> Value {
+        if Self::find_in_path("jadx").is_some() {
+            Self::run_optional_bridge("jadx", "apt install jadx || brew install jadx", args, 30)
+        } else {
+            Self::run_optional_bridge("apktool", "apt install apktool || brew install apktool", args, 30)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -487,5 +635,21 @@ mod tests {
         let (h2, p2) = DynamicBridge::parse_host_port("localhost:8080/").unwrap();
         assert_eq!(h2, "localhost");
         assert_eq!(p2, 8080);
+    }
+
+    #[test]
+    fn test_optional_bridge_unavailable() {
+        let res = DynamicBridge::run_optional_bridge("definitely_non_existent_binary_xyz123", "hint", &[], 1);
+        assert_eq!(res["status"], "unavailable");
+        assert_eq!(res["tool"], "definitely_non_existent_binary_xyz123");
+        assert_eq!(res["install_hint"], "hint");
+    }
+
+    #[test]
+    fn test_optional_bridge_execution() {
+        let res = DynamicBridge::run_optional_bridge("sh", "none", &["-c", "echo hello_bridge"], 5);
+        assert_eq!(res["status"], "ok");
+        assert_eq!(res["exit_code"], 0);
+        assert!(res["stdout"].as_str().unwrap().contains("hello_bridge"));
     }
 }

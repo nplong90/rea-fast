@@ -1,20 +1,29 @@
+#![recursion_limit = "256"]
+
 mod analyze;
 mod asar;
 pub mod bundle;
+pub mod catalog;
+pub mod cdp;
 pub mod diff;
 pub mod dynamic_bridge;
 mod electron;
+pub mod evidence;
 mod fuses;
 mod graph;
+pub mod managed;
 mod mcp;
 pub mod mobile;
 pub mod native_binary;
 pub mod pipeline;
+pub mod plist;
 pub mod secrets;
 pub mod semantics;
+pub mod session_manager;
 pub mod sourcemap;
 pub mod storage_pcap;
 pub mod tauri;
+pub mod tcp_driver;
 pub mod trace;
 
 use clap::{Parser, ValueEnum};
@@ -48,7 +57,11 @@ struct Cli {
 #[command(rename_all = "kebab-case")]
 enum Commands {
     /// Run as Model Context Protocol (MCP) JSON-RPC stdio server
-    Mcp,
+    Mcp {
+        /// Tool catalog profile: 'core' (default, ~40 tools, ~25KB lean context) or 'full' (all 245 tools)
+        #[arg(long, default_value = "core")]
+        profile: String,
+    },
     /// Run parallel structural AST analysis on JS/TS folder or ASAR archive
     Analyze {
         path: PathBuf,
@@ -223,6 +236,75 @@ enum Commands {
     InspectProcess {
         pid: u32,
     },
+    /// Execute GDB bridge if installed or print diagnostic installation instructions
+    Gdb {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Execute Frida bridge if installed or print diagnostic installation instructions
+    Frida {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Inspect binary with objdump if installed or print diagnostic installation instructions
+    Objdump {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Execute Rizin bridge if installed or print diagnostic installation instructions
+    Rizin {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Decode signal using sigrok-cli if installed or print diagnostic installation instructions
+    Sigrok {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Decompile Android APK with jadx/apktool if installed or print diagnostic installation instructions
+    DecompileAndroid {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Inspect binary or XML Apple property list (.plist) file
+    InspectPlist {
+        path: PathBuf,
+    },
+    /// Project Apple Application Graph (.app, Frameworks, PlugIns, XPC)
+    ProjectApple {
+        path: PathBuf,
+    },
+    /// Inspect .NET PE CLI metadata or IL2CPP global-metadata.dat
+    InspectManaged {
+        path: PathBuf,
+    },
+    /// Query or export Evidence DAG and residual unknowns
+    EvidenceBundle {
+        #[arg(short, long)]
+        export: Option<PathBuf>,
+    },
+    /// Inspect universal artifact (ASAR, APK, SQLite, PCAP, Plist, ELF, Mach-O, PE, WASM)
+    InspectArtifact {
+        path: PathBuf,
+    },
+    /// Inspect machine learning model artifact (GGUF, SafeTensors, TFLite)
+    InspectModel {
+        path: PathBuf,
+    },
+    /// Inspect Shannon byte entropy of file or binary sections
+    InspectEntropy {
+        path: PathBuf,
+    },
+    /// Extract printable ASCII strings from file or binary
+    Strings {
+        path: PathBuf,
+        #[arg(short, long, default_value_t = 4)]
+        min_len: usize,
+    },
+    /// Identify Flutter framework build, libraries, and assets
+    IdentifyFlutter {
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -381,7 +463,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if let Some(command) = cli.command {
         match command {
-            Commands::Mcp => mcp::run_mcp_server(),
+            Commands::Mcp { profile } => {
+                if profile == "full" {
+                    mcp::set_profile_full(true);
+                }
+                mcp::run_mcp_server()
+            }
             Commands::Analyze {
                 path,
                 format,
@@ -599,6 +686,73 @@ fn run() -> Result<(), Box<dyn Error>> {
             Commands::InspectProcess { pid } => {
                 let args = json!({ "pid": pid });
                 print_tool_result(mcp::handle_tool_call("inspect_live_process", &args))
+            }
+            Commands::Gdb { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("execute_gdb", &mcp_args))
+            }
+            Commands::Frida { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("execute_frida", &mcp_args))
+            }
+            Commands::Objdump { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("inspect_with_objdump", &mcp_args))
+            }
+            Commands::Rizin { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("execute_rizin", &mcp_args))
+            }
+            Commands::Sigrok { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("decode_signal_sigrok", &mcp_args))
+            }
+            Commands::DecompileAndroid { args } => {
+                let mcp_args = json!({ "args": args });
+                print_tool_result(mcp::handle_tool_call("decompile_apktool_jadx", &mcp_args))
+            }
+            Commands::InspectPlist { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_plist", &args))
+            }
+            Commands::ProjectApple { path } => {
+                let args = json!({
+                    "inventory_evidence": [{ "path": path.to_string_lossy() }]
+                });
+                print_tool_result(mcp::handle_tool_call("project_apple_application_graph", &args))
+            }
+            Commands::InspectManaged { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_managed_artifact", &args))
+            }
+            Commands::EvidenceBundle { export } => {
+                if let Some(exp) = export {
+                    let args = json!({ "path": exp.to_string_lossy(), "overwrite": true });
+                    print_tool_result(mcp::handle_tool_call("export_evidence_bundle", &args))
+                } else {
+                    let args = json!({ "detail": "summary" });
+                    print_tool_result(mcp::handle_tool_call("get_evidence_bundle", &args))
+                }
+            }
+            Commands::InspectArtifact { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_artifact", &args))
+            }
+            Commands::InspectModel { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_model_artifact", &args))
+            }
+            Commands::InspectEntropy { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("inspect_byte_entropy", &args))
+            }
+            Commands::Strings { path, min_len } => {
+                let args = json!({ "path": path.to_string_lossy(), "min_length": min_len });
+                print_tool_result(mcp::handle_tool_call("list_strings", &args))
+            }
+            Commands::IdentifyFlutter { path } => {
+                let args = json!({ "path": path.to_string_lossy() });
+                print_tool_result(mcp::handle_tool_call("identify_flutter_build", &args))
             }
         }
     } else if let Some(path) = cli.path {

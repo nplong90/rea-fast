@@ -74,6 +74,16 @@ pub struct PipelineMetrics {
     pub elapsed_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct FindingsSummary {
+    pub critical: usize,
+    pub high: usize,
+    pub medium: usize,
+    pub low: usize,
+    pub info: usize,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PipelineReport {
     pub target_path: String,
@@ -85,6 +95,9 @@ pub struct PipelineReport {
     pub recovered_modules_count: usize,
     pub extracted_sources_count: usize,
     pub fuse_report: Option<FuseReport>,
+    pub findings_summary: FindingsSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub full_findings_path: Option<String>,
     pub findings: Vec<PipelineFinding>,
     pub metrics: PipelineMetrics,
 }
@@ -503,6 +516,38 @@ impl AuditPipeline {
             elapsed_ms: elapsed * 1000.0,
         };
 
+        let mut findings_summary = FindingsSummary::default();
+        findings_summary.total = findings.len();
+        for f in &findings {
+            match f.severity {
+                Severity::Critical => findings_summary.critical += 1,
+                Severity::High => findings_summary.high += 1,
+                Severity::Medium => findings_summary.medium += 1,
+                Severity::Low => findings_summary.low += 1,
+                Severity::Info => findings_summary.info += 1,
+            }
+        }
+
+        // Sort findings by severity: Critical > High > Medium > Low > Info
+        findings.sort_by_key(|f| match f.severity {
+            Severity::Critical => 0,
+            Severity::High => 1,
+            Severity::Medium => 2,
+            Severity::Low => 3,
+            Severity::Info => 4,
+        });
+
+        let mut full_findings_path = None;
+        if findings.len() > 50 {
+            let full_path = staging_dir.join("audit_findings_full.json");
+            let _ = fs::create_dir_all(&staging_dir);
+            if let Ok(file) = fs::File::create(&full_path) {
+                let _ = serde_json::to_writer_pretty(file, &findings);
+                full_findings_path = Some(full_path.to_string_lossy().to_string());
+            }
+            findings.truncate(50);
+        }
+
         Ok(PipelineReport {
             target_path: target_canonical.to_string_lossy().to_string(),
             target_sha256,
@@ -517,6 +562,8 @@ impl AuditPipeline {
             recovered_modules_count,
             extracted_sources_count,
             fuse_report,
+            findings_summary,
+            full_findings_path,
             findings,
             metrics,
         })

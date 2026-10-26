@@ -256,508 +256,56 @@ struct ToolResult {
     is_error: bool,
 }
 
+static ACTIVE_PROFILE_FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_profile_full(full: bool) {
+    ACTIVE_PROFILE_FULL.store(full, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_profile_full() -> bool {
+    ACTIVE_PROFILE_FULL.load(std::sync::atomic::Ordering::Relaxed)
+        || std::env::var("REA_MCP_PROFILE").as_deref() == Ok("full")
+}
+
 fn tool_list() -> Value {
+    let tools = if is_profile_full() {
+        crate::catalog::get_all_tools()
+    } else {
+        crate::catalog::get_core_tools()
+    };
     json!({
-        "tools": [
-            {
-                "name": "inspect_electron_fuses",
-                "description": "Inspect packaged Electron fuse bytes in a macOS .app, Electron Framework, Windows PE, or Linux ELF executable.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute filesystem path to executable or app bundle"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "analyze_javascript_application",
-                "description": "Reconstruct local ASAR or extracted JavaScript/TypeScript application as an inline application graph.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "input_path": {
-                            "type": "string",
-                            "description": "Local filesystem path to ASAR or directory"
-                        },
-                        "max_file_bytes": {
-                            "type": "integer",
-                            "description": "Optional max file bytes limit"
-                        }
-                    },
-                    "required": ["input_path"]
-                }
-            },
-            {
-                "name": "inspect_asar",
-                "description": "Inspect contents of a Chromium Pickle ASAR archive without unpacking.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Local path to .asar file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "analyze_electron_source",
-                "description": "Statically analyze Electron source code for IPC channels, sender validation, webPreferences, and utilityProcess.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Local file path or virtual path"
-                        },
-                        "source": {
-                            "type": "string",
-                            "description": "Optional source code. If omitted, reads from path."
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "extract_artifact",
-                "description": "Extract all regular files from an ASAR archive or application package into a directory.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Local filesystem path to ASAR or package"
-                        },
-                        "output_directory": {
-                            "type": "string",
-                            "description": "Optional destination directory. If omitted, uses fresh temp dir."
-                        },
-                        "integrity_policy": {
-                            "type": "string",
-                            "enum": ["fail", "record-and-continue"],
-                            "description": "Integrity policy: 'fail' or 'record-and-continue'"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "recover_javascript_sources",
-                "description": "Recover readable modules from JavaScript bundles into an output directory.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Absolute path to UTF-8 bundle file"
-                        },
-                        "output_directory": {
-                            "type": "string",
-                            "description": "Absolute output directory"
-                        },
-                        "extraction_mode": {
-                            "type": "string",
-                            "enum": ["structural", "heuristic", "inspection"]
-                        },
-                        "rewrite_level": {
-                            "type": "string",
-                            "enum": ["minimal", "standard", "aggressive"]
-                        }
-                    },
-                    "required": ["path", "output_directory"]
-                }
-            },
-            {
-                "name": "compare_application_versions",
-                "description": "Compare two JavaScript Application Graph versions.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "left": {
-                            "description": "Left graph (path, JSON string, or graph object)"
-                        },
-                        "right": {
-                            "description": "Right graph (path, JSON string, or graph object)"
-                        }
-                    },
-                    "required": ["left", "right"]
-                }
-            },
-            {
-                "name": "compare_javascript_export_shapes",
-                "description": "Compare static return shapes for one exact module/export selector on two Application Graphs.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "left": {
-                            "description": "Left graph"
-                        },
-                        "left_module_path": {
-                            "type": "string"
-                        },
-                        "left_export_name": {
-                            "type": "string"
-                        },
-                        "right": {
-                            "description": "Right graph"
-                        },
-                        "right_module_path": {
-                            "type": "string"
-                        },
-                        "right_export_name": {
-                            "type": "string"
-                        }
-                    },
-                    "required": [
-                        "left",
-                        "left_module_path",
-                        "left_export_name",
-                        "right",
-                        "right_module_path",
-                        "right_export_name"
-                    ]
-                }
-            },
-            {
-                "name": "trace_application_feature",
-                "description": "Trace a literal seed through reachable parts of a JavaScript Application Graph.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "application": {
-                            "description": "Application path or graph object"
-                        },
-                        "seed": {
-                            "type": "object",
-                            "properties": {
-                                "kind": { "type": "string" },
-                                "value": { "type": "string" },
-                                "match": { "type": "string" },
-                                "case_sensitive": { "type": "boolean" }
-                            },
-                            "required": ["kind", "value"]
-                        },
-                        "direction": {
-                            "type": "string",
-                            "enum": ["outgoing", "incoming", "both"]
-                        }
-                    },
-                    "required": ["application", "seed"]
-                }
-            },
-            {
-                "name": "trace_javascript_semantics",
-                "description": "Trace static JavaScript data-flow, direct call/return, and closure relations.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "application": {
-                            "description": "Application path, inline code string, or semantic graph object"
-                        },
-                        "query": {
-                            "type": "object",
-                            "properties": {
-                                "seed": { "type": "object" },
-                                "direction": { "type": "string" },
-                                "allowed_relations": { "type": "array" },
-                                "expected": { "type": "object" },
-                                "include_ambiguous_dynamic_edges": { "type": "boolean" }
-                            },
-                            "required": ["seed", "direction"]
-                        }
-                    },
-                    "required": ["application", "query"]
-                }
-            },
-            {
-                "name": "extract_sourcemap",
-                "description": "Extract sourcesContent from SourceMap v3 JSON file, inline data URI, or referenced .map into an output directory.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to JS/TS file with sourcemap or standalone .map file"
-                        },
-                        "output_directory": {
-                            "type": "string",
-                            "description": "Directory to write extracted original sources"
-                        }
-                    },
-                    "required": ["path", "output_directory"]
-                }
-            },
-            {
-                "name": "run_audit_pipeline",
-                "description": "Run automated end-to-end security audit pipeline on ASAR, Electron binary, bundle, or source tree.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "target_path": {
-                            "type": "string",
-                            "description": "Path to target file or directory"
-                        },
-                        "output_directory": {
-                            "type": "string",
-                            "description": "Optional custom staging output directory"
-                        }
-                    },
-                    "required": ["target_path"]
-                }
-            },
-            {
-                "name": "pack_asar",
-                "description": "Pack a directory of files into a Chromium Pickle ASAR archive with SHA-256 block hashing.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "source_directory": {
-                            "type": "string",
-                            "description": "Directory containing files to pack"
-                        },
-                        "output_path": {
-                            "type": "string",
-                            "description": "Output path for the destination .asar file"
-                        }
-                    },
-                    "required": ["source_directory", "output_path"]
-                }
-            },
-            {
-                "name": "scan_secrets",
-                "description": "Scan source code or file/directory for high-entropy credentials, tokens, private keys, and API route endpoints with masking.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional local file or directory path to scan"
-                        },
-                        "source": {
-                            "type": "string",
-                            "description": "Optional source code string to scan directly"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "audit_tauri",
-                "description": "Audit Tauri desktop binary for framework signals, embedded tauri.conf.json, extracted web assets, and IPC command calls.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to Tauri executable binary or app bundle"
-                        },
-                        "output_directory": {
-                            "type": "string",
-                            "description": "Optional directory to extract embedded HTML/Brotli assets"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_binary_layout",
-                "description": "Inspect file-backed section/segment ranges, entry point, symbols, and imports of ELF, PE, or Mach-O executable without process execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to binary file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_go_binary",
-                "description": "Inspect embedded Go compiler version, main module path, and dependency list via Go buildinfo markers without process execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to Go binary file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_rust_binary",
-                "description": "Inspect embedded Cargo auditable dependency graph and rustc commit hash without process execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to Rust binary file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_wasm_artifact",
-                "description": "Inspect WebAssembly binary format, LEB128 sections, exported and imported symbols without WASM runtime execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to .wasm file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_android_package",
-                "description": "Inspect Android APK package structure, permissions, activities, services, DEX summaries, and native libraries without device/emulator execution.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to .apk file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_sqlite_database",
-                "description": "Inspect SQLite database file header, page size, cookies, and extract table/index/view schemas without opening a live database connection.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to SQLite database file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "inspect_packet_capture",
-                "description": "Inspect PCAP / PCAPNG network packet capture, timestamps, IP endpoints, port distribution, and protocol statistics without live network capture.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to .pcap or .pcapng file"
-                        }
-                    },
-                    "required": ["path"]
-                }
-            },
-            {
-                "name": "list_browser_targets",
-                "description": "List page and debugger targets exposed by loopback Chrome/Electron CDP endpoint (e.g. http://127.0.0.1:9222).",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "cdp_endpoint": {
-                            "type": "string",
-                            "description": "Loopback CDP endpoint URL (default: http://127.0.0.1:9222)"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "list_electron_targets",
-                "description": "List Electron file:// and app page targets from loopback CDP endpoint.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "cdp_endpoint": {
-                            "type": "string",
-                            "description": "Loopback CDP endpoint URL (default: http://127.0.0.1:9222)"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "list_adb_devices",
-                "description": "List connected Android devices, emulators, and transport IDs via adb.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "inspect_adb_device",
-                "description": "Inspect Android system properties, SDK version, model, ABI, and emulator status via getprop.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "serial": {
-                            "type": "string",
-                            "description": "Optional device serial number"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "list_adb_packages",
-                "description": "List installed package names on connected Android device.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "serial": {
-                            "type": "string",
-                            "description": "Optional device serial number"
-                        },
-                        "third_party_only": {
-                            "type": "boolean",
-                            "description": "Filter to third-party packages only (-3)"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "list_live_processes",
-                "description": "List live running processes on host system with PID, comm name, and cmdline.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "filter": {
-                            "type": "string",
-                            "description": "Optional substring filter for process name or cmdline"
-                        }
-                    }
-                }
-            },
-            {
-                "name": "inspect_live_process",
-                "description": "Inspect detailed host process state: command line arguments, executable path, memory footprint (VmSize/VmRSS), thread count, and loaded dynamic libraries.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "pid": {
-                            "type": "integer",
-                            "description": "Process ID (PID) to inspect"
-                        }
-                    },
-                    "required": ["pid"]
-                }
-            }
-        ]
+        "tools": tools
     })
 }
 
 pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
     match name {
+        "rea_search_tools" => {
+            let query = args
+                .get("query")
+                .or_else(|| args.get("q"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let matches = crate::catalog::search_tools(query);
+            Ok(json!({
+                "query": query,
+                "count": matches.len(),
+                "tools": matches
+            }))
+        }
+        "rea_execute_tool" => {
+            let target_name = args
+                .get("tool_name")
+                .or_else(|| args.get("name"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'tool_name' argument".to_string())?;
+            let empty = json!({});
+            let target_args = args
+                .get("arguments")
+                .or_else(|| args.get("args"))
+                .unwrap_or(&empty);
+            handle_tool_call(target_name, target_args)
+        }
         "inspect_electron_fuses" => {
             let path_str = args
                 .get("path")
@@ -784,10 +332,19 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
             let archive = AsarArchive::open(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let total = archive.entries.len();
+            let truncated = total > 100;
+            let display_entries = if truncated {
+                &archive.entries[..100]
+            } else {
+                &archive.entries[..]
+            };
             let summary = json!({
                 "path": path_str,
-                "total_entries": archive.entries.len(),
-                "entries": archive.entries.iter().map(|e| json!({
+                "total_entries": total,
+                "truncated": truncated,
+                "returned_entries": display_entries.len(),
+                "entries": display_entries.iter().map(|e| json!({
                     "path": e.path,
                     "size": e.size,
                     "offset": e.offset,
@@ -853,12 +410,32 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
-        "compare_application_versions" => {
-            let left_val = args.get("left").ok_or_else(|| "Missing 'left' argument".to_string())?;
-            let right_val = args.get("right").ok_or_else(|| "Missing 'right' argument".to_string())?;
+        "compare_application_versions" | "diff_applications" => {
+            let left_val = args.get("left")
+                .or_else(|| args.get("left_path"))
+                .or_else(|| args.get("source"))
+                .ok_or_else(|| "Missing 'left' argument".to_string())?;
+            let right_val = args.get("right")
+                .or_else(|| args.get("right_path"))
+                .or_else(|| args.get("target"))
+                .ok_or_else(|| "Missing 'right' argument".to_string())?;
             let left_g = resolve_graph_value(left_val)?;
             let right_g = resolve_graph_value(right_val)?;
             let diff = ApplicationDiffer::compare_applications(&left_g, &right_g)?;
+            serde_json::to_value(diff).map_err(|e| e.to_string())
+        }
+        "compare_source_to_bundle" => {
+            let ref_val = args.get("reference")
+                .or_else(|| args.get("left"))
+                .or_else(|| args.get("source"))
+                .ok_or_else(|| "Missing 'reference' argument".to_string())?;
+            let app_val = args.get("application")
+                .or_else(|| args.get("right"))
+                .or_else(|| args.get("bundle"))
+                .ok_or_else(|| "Missing 'application' argument".to_string())?;
+            let ref_g = resolve_graph_value(ref_val)?;
+            let app_g = resolve_graph_value(app_val)?;
+            let diff = ApplicationDiffer::compare_applications(&ref_g, &app_g)?;
             serde_json::to_value(diff).map_err(|e| e.to_string())
         }
         "compare_javascript_export_shapes" => {
@@ -887,8 +464,10 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             )?;
             serde_json::to_value(diff).map_err(|e| e.to_string())
         }
-        "trace_application_feature" => {
-            let app_val = args.get("application").ok_or_else(|| "Missing 'application' argument".to_string())?;
+        "trace_application_feature" | "trace_feature" => {
+            let app_val = args.get("application")
+                .or_else(|| args.get("app"))
+                .ok_or_else(|| "Missing 'application' argument".to_string())?;
             let seed: FeatureSeed = serde_json::from_value(args.get("seed").cloned().unwrap_or(Value::Null))
                 .map_err(|e| format!("Invalid 'seed' argument: {e}"))?;
             let direction = match args.get("direction").and_then(|v| v.as_str()) {
@@ -989,6 +568,12 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                     }
                     all_res.total_secrets = all_res.secrets.len();
                     all_res.total_endpoints = all_res.endpoints.len();
+                    if all_res.secrets.len() > 50 {
+                        all_res.secrets.truncate(50);
+                    }
+                    if all_res.endpoints.len() > 50 {
+                        all_res.endpoints.truncate(50);
+                    }
                     serde_json::to_value(all_res).map_err(|e| e.to_string())
                 } else {
                     Err(format!("Path not found: {path_str}"))
@@ -1073,6 +658,217 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
+        "inspect_artifact" => {
+            let path_str = args
+                .get("path")
+                .or_else(|| args.get("artifact_path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_artifact(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_macho" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_macho(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "list_architectures" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::list_architectures(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_native_exports" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_native_exports(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_byte_entropy" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+            let chunk_size = args.get("chunk_size").and_then(|v| v.as_u64()).unwrap_or(4096) as usize;
+            Ok(NativeInspector::inspect_byte_entropy(&bytes, chunk_size))
+        }
+        "compare_wasm_interfaces" => {
+            let left_path = args.get("left_path").or_else(|| args.get("left")).and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'left_path' argument".to_string())?;
+            let right_path = args.get("right_path").or_else(|| args.get("right")).and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'right_path' argument".to_string())?;
+            let left_bytes = std::fs::read(left_path).map_err(|e| e.to_string())?;
+            let right_bytes = std::fs::read(right_path).map_err(|e| e.to_string())?;
+            Ok(NativeInspector::compare_wasm_interfaces(&left_bytes, &right_bytes))
+        }
+        "inspect_il2cpp_metadata" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_il2cpp_metadata(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "identify_flutter_build" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = MobileInspector::identify_flutter_build(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_apk_signature" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = MobileInspector::inspect_apk_signature(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "project_android_application_graph" => {
+            let path_str = args
+                .get("path")
+                .or_else(|| args.get("apk_path"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' or 'apk_path' argument".to_string())?;
+            let res = MobileInspector::project_android_application_graph(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "trace_dylib_resolution" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let layout = NativeInspector::inspect_layout(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "path": path_str,
+                "format": layout.format,
+                "total_imported_symbols": layout.imports.len(),
+                "imports": layout.imports,
+            }))
+        }
+        "inspect_signature" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let path = Path::new(path_str);
+            if path_str.ends_with(".apk") {
+                let res = MobileInspector::inspect_apk_signature(path).map_err(|e| e.to_string())?;
+                Ok(res)
+            } else {
+                let layout = NativeInspector::inspect_layout(path).map_err(|e| e.to_string())?;
+                let has_code_sig = layout.sections.iter().any(|s| s.name.contains("signature") || s.name.contains("SECURITY") || s.name.contains("certificate"));
+                Ok(json!({
+                    "path": path_str,
+                    "format": layout.format,
+                    "has_signature_section": has_code_sig,
+                    "sha256": layout.sha256,
+                }))
+            }
+        }
+        "list_strings" | "search_strings" => {
+            let path_str = args
+                .get("path")
+                .or_else(|| args.get("file_path"))
+                .and_then(|v| v.as_str());
+            if let Some(path_str) = path_str {
+                let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+                let min_len = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+                let query = args.get("query").or_else(|| args.get("filter")).and_then(|v| v.as_str());
+                let mut strings = NativeInspector::list_strings(&bytes, min_len, 5000);
+                if let Some(q) = query {
+                    let q_lower = q.to_lowercase();
+                    strings.retain(|s| s.to_lowercase().contains(&q_lower));
+                }
+                if strings.len() > limit {
+                    strings.truncate(limit);
+                }
+                Ok(json!({
+                    "path": path_str,
+                    "total_found": strings.len(),
+                    "strings": strings,
+                }))
+            } else {
+                dispatch_extended_tool(name, args)
+            }
+        }
+        "list_segments" => {
+            let path_str = args.get("path").and_then(|v| v.as_str());
+            if let Some(path_str) = path_str {
+                let sections = NativeInspector::list_sections(Path::new(path_str)).map_err(|e| e.to_string())?;
+                Ok(json!({
+                    "path": path_str,
+                    "total_segments": sections.len(),
+                    "segments": sections,
+                }))
+            } else {
+                dispatch_extended_tool(name, args)
+            }
+        }
+        "list_procedures" | "list_names" => {
+            let path_str = args.get("path").and_then(|v| v.as_str());
+            if let Some(path_str) = path_str {
+                let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
+                let symbols = NativeInspector::list_symbols(Path::new(path_str), limit).map_err(|e| e.to_string())?;
+                Ok(json!({
+                    "path": path_str,
+                    "total_symbols": symbols.len(),
+                    "symbols": symbols,
+                }))
+            } else {
+                dispatch_extended_tool(name, args)
+            }
+        }
+        "inspect_model_artifact" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_model_artifact(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_desktop_application" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_desktop_application(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "inspect_python_pyc" => {
+            let path_str = args
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+            let res = NativeInspector::inspect_python_pyc(Path::new(path_str)).map_err(|e| e.to_string())?;
+            Ok(res)
+        }
+        "export_environment_bundle" => {
+            Ok(NativeInspector::export_environment_bundle())
+        }
+        "demangle_swift" => {
+            let sym = args.get("symbol").or_else(|| args.get("name")).and_then(|v| v.as_str()).unwrap_or("");
+            let out = DynamicBridge::run_optional_bridge("swift-demangle", "swift-demangle or xcode-select", &[sym], 5);
+            if out["status"] == "success" {
+                Ok(out)
+            } else {
+                Ok(json!({
+                    "symbol": sym,
+                    "demangled": sym,
+                    "status": "raw"
+                }))
+            }
+        }
         "list_browser_targets" => {
             let endpoint = args
                 .get("cdp_endpoint")
@@ -1123,7 +919,410 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             let detail = DynamicBridge::inspect_live_process(pid).map_err(|e| e.to_string())?;
             serde_json::to_value(detail).map_err(|e| e.to_string())
         }
-        _ => Err(format!("Unknown tool: {name}")),
+        "execute_gdb" => {
+            let args_vec = extract_args_list(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_gdb(&args_ref))
+        }
+        "execute_frida" => {
+            let args_vec = extract_args_list(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_frida(&args_ref))
+        }
+        "inspect_with_objdump" => {
+            let args_vec = extract_objdump_args(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_objdump(&args_ref))
+        }
+        "execute_rizin" | "execute_rizin_command" => {
+            let args_vec = extract_args_list(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_rizin(&args_ref))
+        }
+        "decode_signal_sigrok" | "decode_signal_recording" => {
+            let args_vec = extract_args_list(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_sigrok(&args_ref))
+        }
+        "decompile_apktool_jadx" => {
+            let args_vec = extract_args_list(args);
+            let args_ref: Vec<&str> = args_vec.iter().map(|s| s.as_str()).collect();
+            Ok(DynamicBridge::run_jadx_or_apktool(&args_ref))
+        }
+
+        // Evidence Ledger, DAG & Unknowns (src/evidence.rs)
+        "get_evidence_bundle" => Ok(crate::evidence::get_evidence_bundle(args)),
+        "export_evidence_bundle" => Ok(crate::evidence::export_evidence_bundle(args)),
+        "import_evidence_bundle" => Ok(crate::evidence::import_evidence_bundle(args)),
+        "record_unknown" => Ok(crate::evidence::record_unknown(args)),
+        "update_unknown" => Ok(crate::evidence::update_unknown(args)),
+        "list_unknowns" => Ok(crate::evidence::list_unknowns(args)),
+        "verify_unknown_resolution" => Ok(crate::evidence::verify_unknown_resolution(args)),
+        "inspect_analysis_view" => Ok(crate::evidence::inspect_analysis_view(args)),
+        "compare_artifacts" => Ok(crate::evidence::compare_artifacts(args)),
+        "compare_bundles" => Ok(crate::evidence::compare_bundles(args)),
+        "build_reconstruction_obligation_ledger" => Ok(crate::evidence::build_reconstruction_obligation_ledger(args)),
+        "evaluate_reconstruction_coverage" => Ok(crate::evidence::evaluate_reconstruction_coverage(args)),
+        "verify_reconstruction" => Ok(crate::evidence::verify_reconstruction(args)),
+        "build_call_path" => Ok(crate::evidence::build_call_path(args)),
+        "compare_functions" => Ok(crate::evidence::compare_functions(args)),
+        "find_changed_behavior" => Ok(crate::evidence::find_changed_behavior(args)),
+
+        // Property Lists, Apple & Harmony Graphs (src/plist.rs)
+        "inspect_plist" => Ok(crate::plist::inspect_plist(args)),
+        "project_apple_application_graph" => Ok(crate::plist::project_apple_application_graph(args)),
+        "project_harmony_application_graph" => Ok(crate::plist::project_harmony_application_graph(args)),
+        "inspect_keyed_archive" => Ok(crate::plist::inspect_keyed_archive(args)),
+        "decode_interface_builder" => Ok(crate::plist::decode_interface_builder(args)),
+
+        // ECMA-335 .NET Managed & IL2CPP (src/managed.rs)
+        "inspect_managed_artifact" => Ok(crate::managed::inspect_managed_artifact(args)),
+        "inspect_managed_members" => Ok(crate::managed::inspect_managed_members(args)),
+        "inspect_managed_native_boundaries" => Ok(crate::managed::inspect_managed_native_boundaries(args)),
+        "verify_managed_native_boundaries" => Ok(crate::managed::verify_managed_native_boundaries(args)),
+        "compare_managed_members" => Ok(crate::managed::compare_managed_members(args)),
+        "project_managed_application_graph" => Ok(crate::managed::project_managed_application_graph(args)),
+        "import_managed_reconstruction" => Ok(crate::managed::import_managed_reconstruction(args)),
+
+        // Stateful Debugger Sessions: GDB, Rizin, Frida (src/session_manager.rs)
+        "start_gdb_session" => Ok(crate::session_manager::start_gdb_session(args)),
+        "gdb_console" => Ok(crate::session_manager::gdb_console(args)),
+        "gdb_session_status" => Ok(crate::session_manager::gdb_session_status(args)),
+        "close_gdb_session" => Ok(crate::session_manager::close_gdb_session(args)),
+        "start_rizin_debug_session" => Ok(crate::session_manager::start_rizin_debug_session(args)),
+        "rizin_debug_command" => Ok(crate::session_manager::rizin_debug_command(args)),
+        "rizin_debug_session_status" => Ok(crate::session_manager::rizin_debug_session_status(args)),
+        "close_rizin_debug_session" => Ok(crate::session_manager::close_rizin_debug_session(args)),
+        "start_frida_session" => Ok(crate::session_manager::start_frida_session(args)),
+        "frida_session_status" => Ok(crate::session_manager::frida_session_status(args)),
+        "load_frida_script" => Ok(crate::session_manager::load_frida_script(args)),
+        "unload_frida_script" => Ok(crate::session_manager::unload_frida_script(args)),
+        "resume_frida_session" => Ok(crate::session_manager::resume_frida_session(args)),
+        "close_frida_session" => Ok(crate::session_manager::close_frida_session(args)),
+
+        // CDP Web Inspection & Dynamic Runtime (src/cdp.rs)
+        "inspect_web_page" => Ok(crate::cdp::inspect_web_page(args)),
+        "inspect_electron_page" => Ok(crate::cdp::inspect_electron_page(args)),
+        "inspect_web_event_listeners" => Ok(crate::cdp::inspect_web_event_listeners(args)),
+        "discover_webmcp_tools" => Ok(crate::cdp::discover_webmcp_tools(args)),
+        "observe_web_session" => Ok(crate::cdp::observe_web_session(args)),
+        "observe_web_execution" => Ok(crate::cdp::observe_web_execution(args)),
+        "capture_web_screenshot" => Ok(crate::cdp::capture_web_screenshot(args)),
+        "export_web_scripts" => Ok(crate::cdp::export_web_scripts(args)),
+        "trace_web_module_imports" => Ok(crate::cdp::trace_web_module_imports(args)),
+        "trace_web_source_location" => Ok(crate::cdp::trace_web_source_location(args)),
+        "compare_web_captures" => Ok(crate::cdp::compare_web_captures(args)),
+        "compare_web_screenshots" => Ok(crate::cdp::compare_web_screenshots(args)),
+        "analyze_web_bundle" => Ok(crate::cdp::analyze_web_bundle(args)),
+
+        _ => dispatch_extended_tool(name, args),
+    }
+}
+
+fn is_hopper_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "current_address"
+            | "current_document"
+            | "current_procedure"
+            | "goto_address"
+            | "list_documents"
+            | "list_bookmarks"
+            | "set_bookmark"
+            | "unset_bookmark"
+            | "comment"
+            | "set_comment"
+            | "inline_comment"
+            | "set_inline_comment"
+            | "set_address_name"
+            | "set_addresses_names"
+            | "address_name"
+            | "address_to_file_offset"
+            | "next_address"
+            | "prev_address"
+            | "inspect_address_context"
+    )
+}
+
+fn is_ghidra_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "open_binary"
+            | "close_binary"
+            | "analyze_function"
+            | "binary_overview"
+            | "binary_session"
+            | "procedure_assembly"
+            | "procedure_pseudo_code"
+            | "procedure_info"
+            | "procedure_references"
+            | "procedure_callers"
+            | "procedure_callees"
+            | "procedure_address"
+            | "read_function_instructions"
+            | "read_bytes"
+            | "search_bytes"
+            | "search_procedures"
+            | "search_strings"
+            | "xrefs"
+            | "find_xrefs_to_name"
+            | "get_call_graph"
+            | "trace_call_path"
+            | "resolve_containing_procedure"
+            | "resolve_native_call_targets"
+            | "inspect_native_instruction"
+            | "inspect_native_api"
+            | "inspect_native_data_type"
+            | "inspect_native_dispatch_metadata"
+            | "inspect_native_load_image"
+            | "annotate_native_function"
+            | "batch_decompile"
+            | "trace_native_values"
+            | "trace_native_ui_action"
+    )
+}
+
+fn handle_adb_tool(name: &str, args: &Value) -> Result<Value, String> {
+    let serial = args.get("serial").and_then(|v| v.as_str());
+    let mut adb_args: Vec<String> = Vec::new();
+    if let Some(s) = serial {
+        adb_args.push("-s".to_string());
+        adb_args.push(s.to_string());
+    }
+
+    match name {
+        "list_adb_processes" => {
+            adb_args.extend(["shell".to_string(), "ps".to_string(), "-A".to_string()]);
+        }
+        "list_adb_features" => {
+            adb_args.extend(["shell".to_string(), "pm".to_string(), "list".to_string(), "features".to_string()]);
+        }
+        "list_adb_services" => {
+            adb_args.extend(["shell".to_string(), "service".to_string(), "list".to_string()]);
+        }
+        "list_adb_directory" => {
+            let path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("/");
+            adb_args.extend(["shell".to_string(), "ls".to_string(), "-la".to_string(), path.to_string()]);
+        }
+        "inspect_adb_package" => {
+            let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "dumpsys".to_string(), "package".to_string(), pkg.to_string()]);
+        }
+        "inspect_adb_display" => {
+            adb_args.extend(["shell".to_string(), "wm".to_string(), "size".to_string()]);
+        }
+        "inspect_adb_window" => {
+            adb_args.extend(["shell".to_string(), "dumpsys".to_string(), "window".to_string(), "windows".to_string()]);
+        }
+        "read_adb_logcat" => {
+            adb_args.extend(["logcat".to_string(), "-d".to_string(), "-t".to_string()]);
+            let lines = args.get("count").and_then(|v| v.as_u64()).unwrap_or(200);
+            adb_args.push(lines.to_string());
+        }
+        "read_adb_setting" => {
+            let ns = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("system");
+            let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "settings".to_string(), "get".to_string(), ns.to_string(), key.to_string()]);
+        }
+        "resolve_adb_packages" => {
+            let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "pm".to_string(), "list".to_string(), "packages".to_string(), q.to_string()]);
+        }
+        "pull_adb_file" => {
+            let dev_path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("");
+            let out_dir = args.get("output_directory").and_then(|v| v.as_str()).unwrap_or(".");
+            adb_args.extend(["pull".to_string(), dev_path.to_string(), out_dir.to_string()]);
+        }
+        "push_adb_file" => {
+            let local_path = args.get("local_path").and_then(|v| v.as_str()).unwrap_or("");
+            let dev_path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["push".to_string(), local_path.to_string(), dev_path.to_string()]);
+        }
+        "start_adb_activity" => {
+            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("android.intent.action.VIEW");
+            adb_args.extend(["shell".to_string(), "am".to_string(), "start".to_string(), "-W".to_string(), "-a".to_string(), action.to_string()]);
+            if let Some(uri) = args.get("data_uri").and_then(|v| v.as_str()) {
+                adb_args.extend(["-d".to_string(), uri.to_string()]);
+            }
+        }
+        "start_adb_app" => {
+            let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "monkey".to_string(), "-p".to_string(), pkg.to_string(), "-c".to_string(), "android.intent.category.LAUNCHER".to_string(), "1".to_string()]);
+        }
+        "stop_adb_app" => {
+            let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "am".to_string(), "force-stop".to_string(), pkg.to_string()]);
+        }
+        "install_adb_package" => {
+            let apk = args.get("apk_path").and_then(|v| v.as_str()).unwrap_or("");
+            let replace = args.get("replace").and_then(|v| v.as_bool()).unwrap_or(true);
+            if replace {
+                adb_args.extend(["install".to_string(), "-r".to_string(), apk.to_string()]);
+            } else {
+                adb_args.extend(["install".to_string(), apk.to_string()]);
+            }
+        }
+        "uninstall_adb_package" => {
+            let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["uninstall".to_string(), pkg.to_string()]);
+        }
+        "collect_adb_bugreport" => {
+            let out_dir = args.get("output_directory").and_then(|v| v.as_str()).unwrap_or(".");
+            adb_args.extend(["bugreport".to_string(), out_dir.to_string()]);
+        }
+        "capture_adb_screen" => {
+            adb_args.extend(["exec-out".to_string(), "screencap".to_string(), "-p".to_string()]);
+        }
+        "inspect_adb_client" => {
+            adb_args.push("version".to_string());
+        }
+        "pull_adb_package" => {
+            let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
+            adb_args.extend(["shell".to_string(), "pm".to_string(), "path".to_string(), pkg.to_string()]);
+        }
+        _ => {
+            return Ok(crate::tcp_driver::unavailable_engine_response(
+                "ADB Driver",
+                name,
+                "Tool not mapped or unsupported by local adb bridge.",
+                "inspect_android_package",
+            ));
+        }
+    }
+
+    let refs: Vec<&str> = adb_args.iter().map(|s| s.as_str()).collect();
+    Ok(DynamicBridge::run_optional_bridge(
+        "adb",
+        "apt install adb || brew install android-platform-tools",
+        &refs,
+        15,
+    ))
+}
+
+fn dispatch_extended_tool(name: &str, args: &Value) -> Result<Value, String> {
+    if !crate::catalog::has_tool(name) {
+        return Err(format!("Unknown tool: {name}"));
+    }
+
+    if name.contains("_adb_")
+        || name.ends_with("_adb_screen")
+        || name.starts_with("resolve_adb_")
+        || name.starts_with("collect_adb_")
+    {
+        return handle_adb_tool(name, args);
+    }
+
+    if name.contains("_jeb_") {
+        return Ok(crate::tcp_driver::call_jeb_mcp(name, args));
+    }
+
+    if is_hopper_tool(name) {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "Hopper Disassembler v4/v5",
+            name,
+            "Launch Hopper GUI with Python REA bridge plugin listening on localhost.",
+            "inspect_binary_layout",
+        ));
+    }
+
+    if is_ghidra_tool(name) {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "Ghidra Headless Analyzer",
+            name,
+            "Install Ghidra and configure GHIDRA_INSTALL_DIR, or launch Ghidra Bridge.",
+            "inspect_binary_layout",
+        ));
+    }
+
+    if name.contains("cutter") || name.contains("rizin_debug") {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "Cutter / Rizin Interactive Session",
+            name,
+            "Launch Cutter with REA bridge or start Rizin debug session.",
+            "execute_rizin",
+        ));
+    }
+
+    if name.contains("frida_session")
+        || name.contains("frida_script")
+        || name.contains("frida_devices")
+        || name.contains("frida_processes")
+    {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "Frida Server / Session Daemon",
+            name,
+            "Start frida-server on target device or localhost.",
+            "execute_frida",
+        ));
+    }
+
+    if name.contains("gdb_session") || name == "gdb_console" {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "GDB MI Session Daemon",
+            name,
+            "GDB persistent MI daemon is required for stateful debugging.",
+            "execute_gdb",
+        ));
+    }
+
+    if name.starts_with("observe_web_")
+        || name.starts_with("capture_web_")
+        || name.starts_with("capture_browser_")
+        || name.starts_with("discover_webmcp_")
+    {
+        return Ok(crate::tcp_driver::unavailable_engine_response(
+            "Chrome DevTools Protocol (CDP)",
+            name,
+            "Launch Chromium with --remote-debugging-port=9222.",
+            "list_browser_targets",
+        ));
+    }
+
+    Ok(crate::tcp_driver::unavailable_engine_response(
+        "REA Extended Engine",
+        name,
+        "Proprietary engine or specific environment driver offline.",
+        "inspect_binary_layout",
+    ))
+}
+
+fn extract_objdump_args(args: &Value) -> Vec<String> {
+    if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
+        return arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+    }
+    let mut result = Vec::new();
+    if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
+        match op {
+            "file_headers" => result.push("-f".to_string()),
+            "section_headers" => result.push("-h".to_string()),
+            "symbols" => result.push("-t".to_string()),
+            "relocations" => result.push("-r".to_string()),
+            "dwarf" => result.push("-W".to_string()),
+            "disassemble" => result.push("-d".to_string()),
+            "disassemble_all" => result.push("-D".to_string()),
+            _ => result.push("-x".to_string()),
+        }
+    }
+    if let Some(true) = args.get("follow_debug_links").and_then(|v| v.as_bool()) {
+        result.push("-P".to_string());
+    }
+    if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        result.push(path.to_string());
+    }
+    if result.is_empty() {
+        extract_args_list(args)
+    } else {
+        result
+    }
+}
+
+fn extract_args_list(args: &Value) -> Vec<String> {
+    if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
+        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+    } else if let Some(s) = args.get("command").or_else(|| args.get("path")).and_then(|v| v.as_str()) {
+        vec![s.to_string()]
+    } else {
+        Vec::new()
     }
 }
 
@@ -1159,7 +1358,11 @@ pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
             }
         };
 
-        let id = req.id.unwrap_or(Value::Null);
+        // JSON-RPC 2.0 §4.1: Notifications have no id and must not receive a response
+        let id = match req.id {
+            Some(i) => i,
+            None => continue,
+        };
 
         match req.method.as_str() {
             "initialize" => {
@@ -1259,7 +1462,7 @@ mod tests {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(list.len(), 29);
+        assert!(list.len() >= 35, "Expected at least 35 core tools in catalog");
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -1289,11 +1492,35 @@ mod tests {
         assert!(names.contains(&"list_adb_packages"));
         assert!(names.contains(&"list_live_processes"));
         assert!(names.contains(&"inspect_live_process"));
-        assert!(names.contains(&"inspect_rust_binary"));
-        assert!(names.contains(&"inspect_wasm_artifact"));
-        assert!(names.contains(&"inspect_android_package"));
-        assert!(names.contains(&"inspect_sqlite_database"));
-        assert!(names.contains(&"inspect_packet_capture"));
+        assert!(names.contains(&"execute_gdb"));
+        assert!(names.contains(&"execute_frida"));
+        assert!(names.contains(&"inspect_with_objdump"));
+        assert!(names.contains(&"execute_rizin"));
+        assert!(names.contains(&"decode_signal_sigrok"));
+        assert!(names.contains(&"decompile_apktool_jadx"));
+    }
+
+    #[test]
+    fn test_full_catalog_profile() {
+        set_profile_full(true);
+        let tools = tool_list();
+        let list = tools["tools"].as_array().unwrap();
+        assert_eq!(list.len(), 245, "Expected exactly 245 tools in full catalog");
+        set_profile_full(false);
+    }
+
+    #[test]
+    fn test_rea_search_and_execute_tools() {
+        let search_args = json!({ "query": "electron" });
+        let search_res = handle_tool_call("rea_search_tools", &search_args).unwrap();
+        assert!(search_res["count"].as_u64().unwrap() > 0);
+
+        let exec_args = json!({
+            "tool_name": "rea_search_tools",
+            "arguments": { "query": "fuses" }
+        });
+        let exec_res = handle_tool_call("rea_execute_tool", &exec_args).unwrap();
+        assert!(exec_res["count"].as_u64().unwrap() > 0);
     }
 
     #[test]
@@ -1486,5 +1713,152 @@ mod tests {
         assert!(visited.iter().any(|v| v.as_str().unwrap().contains("auth.js")));
 
         let _ = std::fs::remove_dir_all(app_dir);
+    }
+
+    #[test]
+    fn handles_extended_jeb_tool_diagnostic() {
+        let args = json!({
+            "item_address": "com.example.MainActivity",
+            "item_kind": "type"
+        });
+        let res = handle_tool_call("decompile_jeb_item", &args).unwrap();
+        assert_eq!(res["status"], "unavailable");
+        assert_eq!(res["engine"], "JEB Decompiler MCP Server");
+        assert!(!res["recommended_fallback"].is_null());
+    }
+
+    #[test]
+    fn handles_extended_ghidra_tool_diagnostic() {
+        let args = json!({
+            "procedure": "main"
+        });
+        let res = handle_tool_call("analyze_function", &args).unwrap();
+        assert_eq!(res["status"], "unavailable");
+        assert_eq!(res["engine"], "Ghidra Headless Analyzer");
+        assert_eq!(res["recommended_fallback"], "inspect_binary_layout");
+    }
+
+    #[test]
+    fn handles_unknown_tool_call_error() {
+        let args = json!({});
+        let err = handle_tool_call("non_existent_tool_12345", &args).unwrap_err();
+        assert!(err.contains("Unknown tool"));
+    }
+
+    #[test]
+    fn test_extract_objdump_args_mapping() {
+        let args = json!({
+            "operation": "disassemble",
+            "path": "/bin/ls",
+            "follow_debug_links": true
+        });
+        let mapped = extract_objdump_args(&args);
+        assert_eq!(mapped, vec!["-d", "-P", "/bin/ls"]);
+    }
+
+    #[test]
+    fn test_tool_aliases_execute() {
+        let rizin_args = json!({ "command": "-v" });
+        let res = handle_tool_call("execute_rizin_command", &rizin_args);
+        assert!(res.is_ok());
+
+        let sigrok_args = json!({ "args": ["-V"] });
+        let res_sig = handle_tool_call("decode_signal_recording", &sigrok_args);
+        assert!(res_sig.is_ok());
+    }
+
+    #[test]
+    fn test_unmapped_adb_tool_fallback() {
+        let args = json!({});
+        let res = handle_adb_tool("unmapped_adb_action", &args).unwrap();
+        assert_eq!(res["status"], "unavailable");
+        assert_eq!(res["engine"], "ADB Driver");
+    }
+
+    #[test]
+    fn test_evidence_tools_dispatch() {
+        let bundle = handle_tool_call("get_evidence_bundle", &json!({ "detail": "summary" })).unwrap();
+        assert_eq!(bundle["status"], "complete");
+
+        let rec_args = json!({
+            "question": "Where is the cryptographic key generated?",
+            "domain": "security"
+        });
+        let unk = handle_tool_call("record_unknown", &rec_args).unwrap();
+        assert_eq!(unk["status"], "open");
+
+        let list = handle_tool_call("list_unknowns", &json!({})).unwrap();
+        assert!(list["total"].as_u64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn test_plist_and_apple_graph_tools_dispatch() {
+        let plist_res = handle_tool_call("inspect_plist", &json!({ "path": "/nonexistent/test.plist" })).unwrap();
+        assert_eq!(plist_res["status"], "error");
+
+        let apple_graph = handle_tool_call("project_apple_application_graph", &json!({ "inventory_evidence": [] })).unwrap();
+        assert_eq!(apple_graph["status"], "complete");
+    }
+
+    #[test]
+    fn test_managed_and_debugger_tools_dispatch() {
+        let mg = handle_tool_call("inspect_managed_artifact", &json!({ "path": "/nonexistent/test.dll" })).unwrap();
+        assert_eq!(mg["status"], "error");
+
+        let gdb_status = handle_tool_call("gdb_session_status", &json!({ "session_id": "test_sess" })).unwrap();
+        assert_eq!(gdb_status["status"], "closed");
+    }
+
+    #[test]
+    fn test_new_extended_native_tools_dispatch() {
+        // 1. diff_applications alias
+        let left = json!({
+            "modules": [{ "path": "a.js", "bytes": 10, "lines": 1, "exports": ["init"] }],
+            "edges": []
+        });
+        let right = json!({
+            "modules": [{ "path": "a.js", "bytes": 20, "lines": 2, "exports": ["init", "run"] }],
+            "edges": []
+        });
+        let diff_res = handle_tool_call("diff_applications", &json!({ "left": left, "right": right })).unwrap();
+        assert_eq!(diff_res["changed_modules"].as_array().unwrap().len(), 1);
+
+        // 2. compare_source_to_bundle
+        let compare_res = handle_tool_call("compare_source_to_bundle", &json!({ "reference": left, "application": right })).unwrap();
+        assert_eq!(compare_res["changed_modules"].as_array().unwrap().len(), 1);
+
+        // 3. export_environment_bundle
+        let env_res = handle_tool_call("export_environment_bundle", &json!({})).unwrap();
+        assert_eq!(env_res["backend"], "rea-fast (native zero-dependency)");
+        assert_eq!(env_res["status"], "ready");
+
+        // 4. inspect_byte_entropy & list_strings on temp file
+        let temp_bin = std::env::temp_dir().join(format!("test_entropy_{}.bin", std::process::id()));
+        std::fs::write(&temp_bin, b"HELLO_WORLD_SECRET_KEY_1234567890\n\x00\x00\x00\xff\xfe").unwrap();
+        let entropy_res = handle_tool_call("inspect_byte_entropy", &json!({ "path": temp_bin.to_string_lossy() })).unwrap();
+        assert!(entropy_res["overall_entropy"].as_f64().unwrap() > 0.0);
+
+        let strings_res = handle_tool_call("list_strings", &json!({ "path": temp_bin.to_string_lossy(), "min_length": 4 })).unwrap();
+        assert!(strings_res["strings"].as_array().unwrap().iter().any(|s| s.as_str().unwrap().contains("HELLO_WORLD")));
+
+        // 5. inspect_artifact universal
+        let artifact_res = handle_tool_call("inspect_artifact", &json!({ "path": temp_bin.to_string_lossy() })).unwrap();
+        assert_eq!(artifact_res["artifact_kind"], "file");
+
+        let _ = std::fs::remove_file(temp_bin);
+
+        // 6. compare_wasm_interfaces
+        let wasm_sample = b"\0asm\x01\0\0\0";
+        let wasm_file1 = std::env::temp_dir().join(format!("test_w1_{}.wasm", std::process::id()));
+        let wasm_file2 = std::env::temp_dir().join(format!("test_w2_{}.wasm", std::process::id()));
+        std::fs::write(&wasm_file1, wasm_sample).unwrap();
+        std::fs::write(&wasm_file2, wasm_sample).unwrap();
+        let wasm_diff = handle_tool_call("compare_wasm_interfaces", &json!({
+            "left_path": wasm_file1.to_string_lossy(),
+            "right_path": wasm_file2.to_string_lossy()
+        })).unwrap();
+        assert!(wasm_diff["is_identical"].as_bool().unwrap());
+        let _ = std::fs::remove_file(wasm_file1);
+        let _ = std::fs::remove_file(wasm_file2);
     }
 }

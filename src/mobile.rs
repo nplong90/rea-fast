@@ -302,6 +302,166 @@ impl MobileInspector {
 
         strings
     }
+
+    pub fn identify_flutter_build(path: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
+        let mut is_flutter = false;
+        let mut has_libflutter = false;
+        let mut has_app_lib = false;
+        let mut has_flutter_assets = false;
+        let mut has_snapshot_data = false;
+        let mut artifacts_found = Vec::new();
+
+        if path.is_file() {
+            let bytes = fs::read(path)?;
+            if let Ok(entries) = Self::parse_zip_entries(&bytes) {
+                for e in entries {
+                    let name = e.name.to_lowercase();
+                    if name.contains("libflutter.so") {
+                        is_flutter = true;
+                        has_libflutter = true;
+                        artifacts_found.push(e.name);
+                    } else if name.contains("libapp.so") {
+                        is_flutter = true;
+                        has_app_lib = true;
+                        artifacts_found.push(e.name);
+                    } else if name.contains("flutter_assets") {
+                        is_flutter = true;
+                        has_flutter_assets = true;
+                        artifacts_found.push(e.name);
+                    } else if name.contains("isolate_snapshot") || name.contains("vm_snapshot") || name.contains("kernel_blob.bin") {
+                        is_flutter = true;
+                        has_snapshot_data = true;
+                        artifacts_found.push(e.name);
+                    }
+                }
+            }
+        } else if path.is_dir() {
+            for entry in ignore::WalkBuilder::new(path).build().flatten() {
+                let p_str = entry.path().to_string_lossy().to_lowercase();
+                if p_str.contains("libflutter.so") {
+                    is_flutter = true;
+                    has_libflutter = true;
+                    artifacts_found.push(entry.path().to_string_lossy().to_string());
+                } else if p_str.contains("libapp.so") {
+                    is_flutter = true;
+                    has_app_lib = true;
+                    artifacts_found.push(entry.path().to_string_lossy().to_string());
+                } else if p_str.contains("flutter_assets") {
+                    is_flutter = true;
+                    has_flutter_assets = true;
+                    artifacts_found.push(entry.path().to_string_lossy().to_string());
+                } else if p_str.contains("isolate_snapshot") || p_str.contains("vm_snapshot") || p_str.contains("kernel_blob.bin") {
+                    is_flutter = true;
+                    has_snapshot_data = true;
+                    artifacts_found.push(entry.path().to_string_lossy().to_string());
+                }
+            }
+        }
+
+        artifacts_found.sort();
+        artifacts_found.dedup();
+        if artifacts_found.len() > 50 {
+            artifacts_found.truncate(50);
+        }
+
+        Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "is_flutter": is_flutter,
+            "has_libflutter": has_libflutter,
+            "has_dart_aot_libapp": has_app_lib,
+            "has_flutter_assets": has_flutter_assets,
+            "has_snapshot_data": has_snapshot_data,
+            "detected_artifacts": artifacts_found,
+            "build_type": if has_app_lib { "release_aot" } else if is_flutter { "debug_jit" } else { "non_flutter" }
+        }))
+    }
+
+    pub fn inspect_apk_signature(path: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
+        let bytes = fs::read(path)?;
+        let mut v1_files = Vec::new();
+        let mut has_v1 = false;
+        let mut schemes = Vec::new();
+
+        if let Ok(entries) = Self::parse_zip_entries(&bytes) {
+            for e in entries {
+                if e.name.starts_with("META-INF/") {
+                    let upper = e.name.to_uppercase();
+                    if upper.ends_with(".RSA") || upper.ends_with(".DSA") || upper.ends_with(".EC") || upper.ends_with(".SF") {
+                        v1_files.push(e.name);
+                        has_v1 = true;
+                    }
+                }
+            }
+        }
+        if has_v1 {
+            schemes.push("v1_jar_signature");
+        }
+
+        let magic = b"APK Sig Block 42";
+        let has_v2_or_v3 = bytes.windows(magic.len()).any(|w| w == magic);
+        if has_v2_or_v3 {
+            schemes.push("v2_or_v3_apk_signature_scheme");
+        }
+
+        Ok(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "has_v1_jar_signing": has_v1,
+            "v1_signing_files": v1_files,
+            "has_v2_or_v3_signing": has_v2_or_v3,
+            "schemes": schemes,
+            "file_size": bytes.len(),
+            "sha256": format!("{:x}", Sha256::digest(&bytes))
+        }))
+    }
+
+    pub fn project_android_application_graph(path: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
+        let info = Self::inspect_apk(path)?;
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+
+        let app_id = info.package_name.clone().unwrap_or_else(|| "android_app".to_string());
+        nodes.push(serde_json::json!({
+            "id": app_id,
+            "kind": "application",
+            "sha256": info.sha256
+        }));
+
+        for act in &info.activities {
+            let act_id = format!("{app_id}:{act}");
+            nodes.push(serde_json::json!({ "id": act_id, "kind": "activity", "name": act }));
+            edges.push(serde_json::json!({ "source": app_id, "target": act_id, "kind": "declares_activity" }));
+        }
+
+        for srv in &info.services {
+            let srv_id = format!("{app_id}:{srv}");
+            nodes.push(serde_json::json!({ "id": srv_id, "kind": "service", "name": srv }));
+            edges.push(serde_json::json!({ "source": app_id, "target": srv_id, "kind": "declares_service" }));
+        }
+
+        for perm in &info.permissions {
+            let perm_id = format!("permission:{perm}");
+            nodes.push(serde_json::json!({ "id": perm_id, "kind": "permission", "name": perm }));
+            edges.push(serde_json::json!({ "source": app_id, "target": perm_id, "kind": "requests_permission" }));
+        }
+
+        for (abi, libs) in &info.native_libraries {
+            for lib in libs {
+                let lib_id = format!("native_lib:{abi}:{lib}");
+                nodes.push(serde_json::json!({ "id": lib_id, "kind": "native_library", "abi": abi, "name": lib }));
+                edges.push(serde_json::json!({ "source": app_id, "target": lib_id, "kind": "bundles_native_lib" }));
+            }
+        }
+
+        Ok(serde_json::json!({
+            "package_name": info.package_name,
+            "total_nodes": nodes.len(),
+            "total_edges": edges.len(),
+            "nodes": nodes,
+            "edges": edges,
+            "dex_count": info.dex_files.len(),
+            "status": "complete"
+        }))
+    }
 }
 
 #[cfg(test)]
