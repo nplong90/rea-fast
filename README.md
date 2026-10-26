@@ -218,6 +218,34 @@ rea-fast sigrok -- -V
 rea-fast decompile-android -- app.apk
 ```
 
+### 23. Native Chrome & Electron CDP Automation
+Interact with live Chromium, Brave, or Electron applications over raw WebSocket CDP (no Playwright/Node needed):
+
+```bash
+# 1. Start browser or Electron app with debugging port
+# Google Chrome / Brave:
+google-chrome --remote-debugging-port=9222
+brave-browser --remote-debugging-port=9222
+
+# Electron App:
+./my-electron-app --remote-debugging-port=9222
+
+# 2. List live tab and webview targets
+rea-fast list-cdp-targets
+rea-fast list-electron-targets
+
+# 3. Evaluate JavaScript inside the runtime
+rea-fast eval "document.title"
+rea-fast eval -t <TARGET_ID> "window.__REDUX_STATE__ || window.location.href"
+
+# 4. Capture native page screenshot (saved to PNG)
+rea-fast screenshot -o ./page.png
+rea-fast screenshot -t <TARGET_ID> -o ./target.png
+
+# 5. Inspect live DOM size, scripts, and page metadata
+rea-fast inspect-web-page -t <TARGET_ID>
+```
+
 ---
 
 ## Model Context Protocol (MCP) Integration
@@ -297,4 +325,4 @@ Tested against `@rea/core` v6.7.0 on Linux (4 CPU cores):
 
 ## License
 
-MIT OR Apache-2.0
+MIT

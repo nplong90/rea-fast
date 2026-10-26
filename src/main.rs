@@ -213,6 +213,30 @@ enum Commands {
         #[arg(long, default_value = "http://127.0.0.1:9222")]
         endpoint: String,
     },
+    /// Capture screenshot of web or Electron page via CDP
+    Screenshot {
+        #[arg(long, default_value = "http://127.0.0.1:9222")]
+        endpoint: String,
+        #[arg(short, long)]
+        target_id: Option<String>,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Evaluate JavaScript expression in page runtime via CDP
+    Eval {
+        #[arg(long, default_value = "http://127.0.0.1:9222")]
+        endpoint: String,
+        #[arg(short, long)]
+        target_id: Option<String>,
+        expression: String,
+    },
+    /// Inspect live web or Electron page DOM and scripts via CDP
+    InspectWebPage {
+        #[arg(long, default_value = "http://127.0.0.1:9222")]
+        endpoint: String,
+        #[arg(short, long)]
+        target_id: Option<String>,
+    },
     /// List connected Android devices and emulators via adb
     ListAdbDevices,
     /// Inspect Android device properties, model, ABI, and emulator status
@@ -657,6 +681,30 @@ fn run() -> Result<(), Box<dyn Error>> {
             Commands::ListElectronTargets { endpoint } => {
                 let args = json!({ "cdp_endpoint": endpoint });
                 print_tool_result(mcp::handle_tool_call("list_electron_targets", &args))
+            }
+            Commands::Screenshot { endpoint, target_id, output } => {
+                let mut args = json!({ "cdp_endpoint": endpoint });
+                if let Some(t) = target_id {
+                    args["target_id"] = json!(t);
+                }
+                if let Some(o) = output {
+                    args["output_file"] = json!(o.to_string_lossy());
+                }
+                print_tool_result(mcp::handle_tool_call("capture_web_screenshot", &args))
+            }
+            Commands::Eval { endpoint, target_id, expression } => {
+                let mut args = json!({ "cdp_endpoint": endpoint, "expression": expression });
+                if let Some(t) = target_id {
+                    args["target_id"] = json!(t);
+                }
+                print_tool_result(mcp::handle_tool_call("evaluate_web_script", &args))
+            }
+            Commands::InspectWebPage { endpoint, target_id } => {
+                let mut args = json!({ "cdp_endpoint": endpoint });
+                if let Some(t) = target_id {
+                    args["target_id"] = json!(t);
+                }
+                print_tool_result(mcp::handle_tool_call("inspect_web_page", &args))
             }
             Commands::ListAdbDevices => {
                 let args = json!({});

@@ -1008,6 +1008,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
         "observe_web_session" => Ok(crate::cdp::observe_web_session(args)),
         "observe_web_execution" => Ok(crate::cdp::observe_web_execution(args)),
         "capture_web_screenshot" => Ok(crate::cdp::capture_web_screenshot(args)),
+        "evaluate_web_script" => Ok(crate::cdp::evaluate_web_script(args)),
         "export_web_scripts" => Ok(crate::cdp::export_web_scripts(args)),
         "trace_web_module_imports" => Ok(crate::cdp::trace_web_module_imports(args)),
         "trace_web_source_location" => Ok(crate::cdp::trace_web_source_location(args)),

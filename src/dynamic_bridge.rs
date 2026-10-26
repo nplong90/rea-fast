@@ -93,10 +93,37 @@ impl DynamicBridge {
         );
         stream.write_all(request.as_bytes())?;
 
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response)?;
+        let mut header_bytes = Vec::new();
+        let mut byte = [0u8; 1];
+        while !header_bytes.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte)?;
+            header_bytes.push(byte[0]);
+            if header_bytes.len() > 16384 {
+                return Err("HTTP header too large".into());
+            }
+        }
 
-        let body = Self::extract_http_body(&response)?;
+        let header_str = String::from_utf8_lossy(&header_bytes);
+        let mut content_length = 0usize;
+        for line in header_str.lines() {
+            if line.to_ascii_lowercase().starts_with("content-length:") {
+                if let Some(val) = line.split(':').nth(1) {
+                    content_length = val.trim().parse().unwrap_or(0);
+                }
+            }
+        }
+
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+            stream.read_exact(&mut body)?;
+        } else {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 { break; }
+                body.extend_from_slice(&chunk[..n]);
+            }
+        }
+
         let targets: Vec<CdpTarget> = serde_json::from_slice(&body)?;
         Ok(targets)
     }
@@ -128,15 +155,6 @@ impl DynamicBridge {
             9222
         };
         Ok((host, port))
-    }
-
-    fn extract_http_body(res: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let delimiter = b"\r\n\r\n";
-        if let Some(pos) = res.windows(delimiter.len()).position(|w| w == delimiter) {
-            Ok(res[pos + delimiter.len()..].to_vec())
-        } else {
-            Err("Malformed HTTP response from CDP endpoint".into())
-        }
     }
 
     // ==========================================
