@@ -170,7 +170,7 @@ try {
     tool_name: 'compare_artifacts', arguments: { left: { x: 7 }, right: { x: 7 } },
   }, (v) => { assert.equal(v.identical, true); }); record('rea_execute_tool');
   assert.equal(rows.length, 245);
-  assert.equal(verified.length, 19, '19 fixture executions expected');
+  assert.equal(verified.length, 20, '20 fixture executions expected');
 } catch (e) {
   failure = String(e.stack ?? e);
   process.exitCode = 1;
