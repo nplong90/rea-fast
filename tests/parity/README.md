@@ -37,3 +37,27 @@ provider capabilities are explicitly excluded. A single uncontrolled elapsed
 time observation is logged for diagnosis but **must not be called a benchmark**.
 Comparable end-to-end CPU, peak process-family memory, cold/warm runs, output
 bytes/tokens and equivalent-task coverage remain P5 work.
+
+## ASAR container fixture
+
+
+The ASAR runner produces an archive from the same three-file `js-basic`
+fixture using the real Rust packer, then independently runs `inspect-asar`
+and `inspect-artifact` in Rust and `inspect-artifact` in pinned upstream REA.
+It checks against `asar-basic.expected.json`:
+
+- Exact archive SHA-256 and byte size.
+- File entry paths, sizes and declared SHA-256 integrity digests.
+- Complete archive inventory on both sides; no truncated result allowed.
+
+```sh
+node tests/parity/compare-asar.mjs \
+  --rust-bin "$(pwd)/target/debug/rea-fast" \
+  --upstream /absolute/path/to/pinned/rea
+```
+
+The generated archive is placed in a unique temporary directory and cleaned
+up after each run. This tests a common **inventory subset**; upstream's
+artifact-graph provenance, relationship semantics and verified read/extract
+claims exceed Rust's current `inspect-artifact` output and are not certified.
+The same 0/1/2 result statuses apply.

@@ -42,7 +42,7 @@
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
 | P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — conservative route labels; fixture verification pending |
-| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS module subset matched against real upstream |
+| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS module and ASAR inventory subsets matched against real upstream |
 | P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | In progress — bounded MCP stdio requests, parser mutation tests |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
 
@@ -115,4 +115,15 @@ based on tool counts or synthetic stub responses.
   CI runs the protocol smoke on Linux/Windows and streamed limit check on Linux.
 - Neither one fixture nor one uncontrolled timing observation establishes
   full parity, resource safety or faster equivalent-task performance.
+
+### 2026-10-27 — second upstream parity fixture: ASAR inventory
+
+- Packed the three-file JS fixture using rea-fast's real Chromium ASAR packer.
+  Independently inspected it with rea-fast and upstream REA's artifact-graph
+  provider. The complete regular-file inventory, exact path, sizes, declared
+  SHA-256 hashes, root digest and archive size matched a checked-in golden.
+- Committed the reproducible opt-in runner `tests/parity/compare-asar.mjs`,
+  which pins upstream, distinguishes mismatch from `not_comparable`, and
+  excludes Evidence provenance, graph semantics and verified extraction from
+  its claimed equivalence. P3 and P5 remain open.
 

@@ -1,0 +1,10 @@
+{
+  "format": "asar",
+  "archive_sha256": "3daa78446d4137b2b67100f0f327ead4c8c2303be4856c55ff68463afdd4e518",
+  "archive_bytes": 751,
+  "entries": [
+    { "path": "package.json", "size": 123, "sha256": "ba27042d8981e9ab7cad45de08da9ca40034fe03d0c70a475610e3aaaf3c141f" },
+    { "path": "src/index.js", "size": 96, "sha256": "2d53020a02d0d3bbef6f25da1939bcc73fb048186066d4e6b22686578ed84151" },
+    { "path": "src/math.js", "size": 44, "sha256": "a15dfe49738f3a322c4a5c04f305a8214ef329279af04d51304400416b83ead6" }
+  ]
+}
