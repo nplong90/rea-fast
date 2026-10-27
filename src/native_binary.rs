@@ -1030,7 +1030,8 @@ mod tests {
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("rea_native_{}_{}.bin", std::process::id(), id));
+        let path =
+            std::env::temp_dir().join(format!("rea_native_{}_{}.bin", std::process::id(), id));
         let file = fs::File::create(&path).unwrap();
         file.set_len(MAX_NATIVE_ARTIFACT_BYTES + 1).unwrap();
         assert!(read_bounded_artifact(&path).is_err());
