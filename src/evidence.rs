@@ -253,13 +253,8 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
     let unknown_count = imported_unknowns.len();
     store.records.extend(imported_records);
     store.unknowns.extend(imported_unknowns);
-    for (key, destination) in [
-        ("scenarios", &mut store.scenarios),
-        ("captures", &mut store.captures),
-        ("artifacts", &mut store.artifacts),
-        ("providers", &mut store.providers),
-        ("environments", &mut store.environments),
-    ] {
+    // Process each section in sequence so the mutable borrows do not overlap.
+    let append_unique = |key: &str, destination: &mut Vec<Value>| {
         if let Some(items) = parsed.get(key).and_then(Value::as_array) {
             for item in items {
                 if !destination.contains(item) {
@@ -267,7 +262,12 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
                 }
             }
         }
-    }
+    };
+    append_unique("scenarios", &mut store.scenarios);
+    append_unique("captures", &mut store.captures);
+    append_unique("artifacts", &mut store.artifacts);
+    append_unique("providers", &mut store.providers);
+    append_unique("environments", &mut store.environments);
 
     json!({
         "status": "imported",
