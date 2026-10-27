@@ -21,9 +21,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     error::Error,
-    io::{self, BufRead, Write},
+    io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
 };
+
+const MAX_LOCAL_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Bound the direct MCP artifact readers as well as the native inspector:
+/// metadata is not sufficient because files may grow while being read.
+fn read_local_artifact(path: &Path) -> Result<Vec<u8>, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_LOCAL_ARTIFACT_BYTES {
+        return Err("MCP artifact exceeds 256 MiB input limit".to_string());
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_LOCAL_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_LOCAL_ARTIFACT_BYTES {
+        return Err("MCP artifact grew past 256 MiB input limit".to_string());
+    }
+    Ok(bytes)
+}
 
 fn is_asar(path: &Path) -> bool {
     path.extension().and_then(|s| s.to_str()) == Some("asar")
@@ -700,7 +719,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+            let bytes = read_local_artifact(Path::new(path_str))?;
             let res = NativeInspector::inspect_wasm(&bytes);
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
@@ -773,7 +792,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+            let bytes = read_local_artifact(Path::new(path_str))?;
             let chunk_size = args
                 .get("chunk_size")
                 .and_then(|v| v.as_u64())
@@ -791,8 +810,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("right"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'right_path' argument".to_string())?;
-            let left_bytes = std::fs::read(left_path).map_err(|e| e.to_string())?;
-            let right_bytes = std::fs::read(right_path).map_err(|e| e.to_string())?;
+            let left_bytes = read_local_artifact(Path::new(left_path))?;
+            let right_bytes = read_local_artifact(Path::new(right_path))?;
             Ok(NativeInspector::compare_wasm_interfaces(
                 &left_bytes,
                 &right_bytes,
@@ -880,7 +899,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("file_path"))
                 .and_then(|v| v.as_str());
             if let Some(path_str) = path_str {
-                let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
+                let bytes = read_local_artifact(Path::new(path_str))?;
                 let min_len = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
                 let query = args
@@ -2166,6 +2185,35 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(app_dir);
+    }
+
+    #[test]
+    fn direct_mcp_artifact_readers_refuse_oversized_inputs() {
+        let path = std::env::temp_dir().join(format!(
+            "rea_mcp_bound_{}.wasm",
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_LOCAL_ARTIFACT_BYTES + 1).unwrap();
+        assert!(read_local_artifact(&path).is_err());
+        for name in [
+            "inspect_wasm_artifact",
+            "inspect_byte_entropy",
+            "list_strings",
+        ] {
+            assert!(
+                handle_tool_call(name, &json!({"path": path})).is_err(),
+                "{name} accepted oversized input"
+            );
+        }
+        assert!(
+            handle_tool_call(
+                "compare_wasm_interfaces",
+                &json!({"left_path": path, "right_path": path})
+            )
+            .is_err()
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
