@@ -38,6 +38,11 @@ memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
 
 - **Static inspection core**: AST parsing (`oxc_parser`) and byte inspection do not execute analyzed artifacts. Live CDP/debugger tools are a separate, potentially executing capability and must be used intentionally.
 - **Chromium Pickle ASAR Inspection & Safe Extraction**: Fast header parsing, direct offsets, random access file I/O, SHA-256 integrity verification, and directory traversal defense.
+  Extraction refuses pre-existing files and symlinked child paths; in-memory
+  member reads have a 64 MiB cap. Use a fresh private destination directory.
+  Concurrent replacement of parent paths is not yet guarded by directory-FD
+  relative operations, so extraction into shared writable directories is not
+  claimed race-proof.
 - **Electron Fuse Detection**: Scans 32-byte sentinel patterns across ELF, PE, and Mach-O binaries to extract all 9 Electron fuses without runtime launching.
 - **AST-Based Bundle Recovery**: Unbundles Webpack chunks, Webpack IIFE, Browserify, and esbuild CommonJS wrappers into structured directories.
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.

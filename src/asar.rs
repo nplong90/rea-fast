@@ -16,6 +16,44 @@ use std::os::windows::fs::FileExt;
 
 const MAX_HEADER_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LISTING_BYTES: usize = 64 * 1024 * 1024;
+const MAX_ASAR_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Reject symlinks anywhere below the selected extraction root. Lexical path
+/// containment alone does not prevent an existing `subdir` symlink from
+/// redirecting writes outside that root.
+fn ensure_plain_subdirectories(root: &Path, rel_parent: &Path) -> io::Result<()> {
+    let mut current = root.to_path_buf();
+    for component in rel_parent.components() {
+        let Component::Normal(name) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsafe ASAR parent path",
+            ));
+        };
+        current.push(name);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!(
+                        "ASAR extraction parent is not a plain directory: {}",
+                        current.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&current)?,
+            Err(error) => return Err(error),
+        }
+    }
+    if current.canonicalize()? != current {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "ASAR extraction parent resolves through a symlink",
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -211,9 +249,12 @@ impl AsarArchive {
                 Self::collect_entries(subfiles, &path, entries, retained_bytes)?;
             } else if let Some(size) = node.size {
                 let offset = match node.offset {
-                    Some(AsarOffset::Str(s)) => s.parse::<u64>().unwrap_or(0),
+                    Some(AsarOffset::Str(s)) => s.parse::<u64>().map_err(|_| {
+                        format!("ASAR entry has invalid numeric data offset: {path}")
+                    })?,
                     Some(AsarOffset::Num(n)) => n,
-                    None => 0,
+                    None if node.unpacked.unwrap_or(false) => 0,
+                    None => return Err(format!("ASAR entry has no data offset: {path}").into()),
                 };
                 entries.push(AsarEntry {
                     path,
@@ -229,12 +270,85 @@ impl AsarArchive {
     }
 
     pub fn read_file(&self, entry: &AsarEntry) -> io::Result<Vec<u8>> {
+        if entry.size > MAX_ASAR_ENTRY_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ASAR entry exceeds 64 MiB in-memory read limit",
+            ));
+        }
         if entry.unpacked {
             let unpacked_root = self.path.with_extension("asar.unpacked");
             let file_path = unpacked_root.join(&entry.path);
-            std::fs::read(file_path)
+            if fs::symlink_metadata(&unpacked_root)?
+                .file_type()
+                .is_symlink()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "ASAR unpacked root must not be a symlink",
+                ));
+            }
+            // A simple symlinked asset can escape the unpacked sibling tree.
+            let root = unpacked_root.canonicalize()?;
+            let parent = Path::new(&entry.path)
+                .parent()
+                .unwrap_or_else(|| Path::new(""));
+            let mut current = root.clone();
+            for component in parent.components() {
+                let Component::Normal(name) = component else {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unsafe unpacked path",
+                    ));
+                };
+                current.push(name);
+                if fs::symlink_metadata(&current)?.file_type().is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "symlinked ASAR unpacked parent",
+                    ));
+                }
+            }
+            if !fs::symlink_metadata(&file_path)?.file_type().is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "ASAR unpacked member must be a plain regular file",
+                ));
+            }
+            let file = File::open(file_path)?;
+            if file.metadata()?.len() > MAX_ASAR_ENTRY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unpacked ASAR file exceeds 64 MiB limit",
+                ));
+            }
+            use io::Read;
+            let mut buffer = Vec::with_capacity(entry.size as usize);
+            file.take(MAX_ASAR_ENTRY_BYTES + 1)
+                .read_to_end(&mut buffer)?;
+            if buffer.len() as u64 > MAX_ASAR_ENTRY_BYTES {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unpacked ASAR file grew beyond 64 MiB limit",
+                ));
+            }
+            Ok(buffer)
         } else {
-            let data_offset = 8 + self.header_size + entry.offset;
+            let data_offset = 8u64
+                .checked_add(self.header_size)
+                .and_then(|offset| offset.checked_add(entry.offset))
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "ASAR data offset overflow")
+                })?;
+            let end = data_offset.checked_add(entry.size).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "ASAR data extent overflow")
+            })?;
+            if end > self.file.metadata()?.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "ASAR entry extends past archive end",
+                ));
+            }
             let mut buf = vec![0u8; entry.size as usize];
             read_exact_at(&self.file, &mut buf, data_offset)?;
             Ok(buf)
@@ -277,9 +391,8 @@ impl AsarArchive {
                 );
             }
 
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent)?;
-            }
+            let rel_parent = rel_path.parent().unwrap_or_else(|| Path::new(""));
+            ensure_plain_subdirectories(&canonical_dest, rel_parent)?;
 
             let bytes = self.read_file(entry)?;
             let observed_hash = format!("{:x}", Sha256::digest(&bytes));
@@ -312,7 +425,12 @@ impl AsarArchive {
                 }
             }
 
-            let mut out_file = File::create(&target_path)?;
+            // Exclusive creation refuses existing files and leaf symlinks;
+            // extraction must never truncate a pre-existing user file.
+            let mut out_file = File::options()
+                .write(true)
+                .create_new(true)
+                .open(&target_path)?;
             out_file.write_all(&bytes)?;
 
             #[cfg(unix)]
@@ -513,6 +631,119 @@ pub fn extract_artifact(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn isolated_test_dir() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "rea_asar_security_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn oversized_and_out_of_bounds_asar_entries_are_rejected_without_allocation() {
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("input.asar");
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"large.bin":{"size":67108865,"offset":"0"}}}"#,
+                b"",
+            ),
+        )
+        .unwrap();
+        let archive = AsarArchive::open(&archive_path).unwrap();
+        assert!(archive.read_file(&archive.entries[0]).is_err());
+
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"bad.bin":{"size":5,"offset":"18446744073709551615"}}}"#,
+                b"hello",
+            ),
+        )
+        .unwrap();
+        let archive = AsarArchive::open(&archive_path).unwrap();
+        assert!(archive.read_file(&archive.entries[0]).is_err());
+
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"bad.bin":{"size":5,"offset":"not-an-offset"}}}"#,
+                b"hello",
+            ),
+        )
+        .unwrap();
+        assert!(AsarArchive::open(&archive_path).is_err());
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn extraction_refuses_to_overwrite_existing_file() {
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("input.asar");
+        let dest = scope.join("destination");
+        fs::create_dir(&dest).unwrap();
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"existing.txt":{"size":5,"offset":"0"}}}"#,
+                b"hello",
+            ),
+        )
+        .unwrap();
+        fs::write(dest.join("existing.txt"), b"personal content").unwrap();
+        let archive = AsarArchive::open(&archive_path).unwrap();
+        assert!(archive.extract_all(&dest, IntegrityPolicy::Fail).is_err());
+        assert_eq!(
+            fs::read(dest.join("existing.txt")).unwrap(),
+            b"personal content"
+        );
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extraction_rejects_symlinked_parent_and_output_file() {
+        use std::os::unix::fs::symlink;
+
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("input.asar");
+        let dest = scope.join("destination");
+        let outside = scope.join("outside");
+        fs::create_dir(&dest).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"sub":{"files":{"escape.txt":{"size":5,"offset":"0"}}}}}"#,
+                b"hello",
+            ),
+        )
+        .unwrap();
+        let archive = AsarArchive::open(&archive_path).unwrap();
+
+        symlink(&outside, dest.join("sub")).unwrap();
+        assert!(archive.extract_all(&dest, IntegrityPolicy::Fail).is_err());
+        assert!(!outside.join("escape.txt").exists());
+
+        fs::remove_file(dest.join("sub")).unwrap();
+        fs::create_dir(dest.join("sub")).unwrap();
+        fs::write(outside.join("victim.txt"), b"do not alter").unwrap();
+        symlink(outside.join("victim.txt"), dest.join("sub/escape.txt")).unwrap();
+        assert!(archive.extract_all(&dest, IntegrityPolicy::Fail).is_err());
+        assert_eq!(
+            fs::read(outside.join("victim.txt")).unwrap(),
+            b"do not alter"
+        );
+        fs::remove_dir_all(scope).unwrap();
+    }
 
     fn make_test_asar(json: &str, content: &[u8]) -> Vec<u8> {
         let text = json.as_bytes();

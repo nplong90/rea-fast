@@ -127,3 +127,17 @@ based on tool counts or synthetic stub responses.
   excludes Evidence provenance, graph semantics and verified extraction from
   its claimed equivalence. P3 and P5 remain open.
 
+### 2026-10-27 — ASAR extraction containment and memory guard
+
+- Reject subdirectory symlinks and non-directory parents below extraction
+  destination. Write leaf files with exclusive creation to avoid following a
+  symlink or clobbering an existing user file. Existing destinations now fail
+  instead of being silently overwritten.
+- Bound in-memory ASAR member reads to 64 MiB, check packed data extents for
+  overflow/EOF, reject malformed file offsets, and reject symlink/nonregular
+  unpacked members before reading. Added regression tests for oversized and
+  corrupt offsets, symlink escape attempts, and existing-file preservation.
+- This protects against static/pre-existing symlink paths; fully race-free
+  extraction to a concurrently mutable destination requires further
+  dirfd-relative/openat-style work. P4 remains in progress.
+
