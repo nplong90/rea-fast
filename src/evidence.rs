@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::sync::{OnceLock, RwLock};
 
 const MAX_EVIDENCE_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
@@ -119,26 +119,61 @@ pub fn get_evidence_bundle(args: &Value) -> Value {
     }
 }
 
+/// Stage the complete export before publishing, never writing through an
+/// existing target symlink or truncating another file on failed output.
 pub fn export_evidence_bundle(args: &Value) -> Value {
-    let path_str = match args.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return json!({ "status": "error", "message": "Missing 'path' argument" }),
+    let path_str = match args.get("path").and_then(Value::as_str) {
+        Some(path) if !path.is_empty() => path,
+        _ => return json!({"status": "error", "message": "Missing 'path' argument"}),
     };
-    let overwrite = args
-        .get("overwrite")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let p = std::path::Path::new(path_str);
-    if p.exists() && !overwrite {
-        return json!({ "status": "error", "message": format!("File {path_str} already exists. Set overwrite: true to replace.") });
-    }
-
-    let bundle = get_evidence_bundle(&json!({ "detail": "complete" }));
+    let overwrite = args.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+    let target = std::path::Path::new(path_str);
+    let Some(name) = target.file_name() else {
+        return json!({"status": "error", "message": "Invalid export destination"});
+    };
+    let bundle = get_evidence_bundle(&json!({"detail": "complete"}));
     let canonical = canonicalize_json(&bundle);
-    if let Err(e) = fs::write(p, canonical) {
-        return json!({ "status": "error", "message": format!("Failed to write bundle: {e}") });
+    if canonical.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return json!({"status": "error", "message": "Evidence export exceeds 64 MiB limit"});
     }
-    json!({ "status": "exported", "path": path_str, "sha256": digest_value(&bundle) })
+    let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stage = target.with_file_name(format!(
+        ".{}.{}.{}.rea-stage",
+        name.to_string_lossy(),
+        std::process::id(),
+        suffix
+    ));
+    let publish = (|| -> std::io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&stage)?;
+        file.write_all(canonical.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if overwrite {
+            fs::rename(&stage, target)
+        } else {
+            // Atomic, no-clobber publication on the same filesystem.
+            fs::hard_link(&stage, target)
+        }
+    })();
+    let _ = fs::remove_file(&stage);
+    if let Err(error) = publish {
+        return json!({
+            "status": "error",
+            "message": format!("Failed to publish evidence bundle: {error}")
+        });
+    }
+    json!({"status": "exported", "path": path_str, "sha256": digest})
 }
 
 pub fn import_evidence_bundle(args: &Value) -> Value {
@@ -464,45 +499,55 @@ pub fn compare_artifacts(args: &Value) -> Value {
     })
 }
 
+fn read_comparable_bundle(path: &str) -> Result<Value, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return Err("Evidence bundle exceeds 64 MiB limit".to_string());
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if !value.is_object()
+        || !value.get("records").is_some_and(Value::is_array)
+        || !value.get("unknowns").is_some_and(Value::is_array)
+    {
+        return Err("Invalid bundle: records and unknowns arrays are required".to_string());
+    }
+    Ok(value)
+}
+
 pub fn compare_bundles(args: &Value) -> Value {
     let (Some(left_path), Some(right_path)) = (
-        args.get("left_bundle_path").and_then(|v| v.as_str()),
-        args.get("right_bundle_path").and_then(|v| v.as_str()),
+        args.get("left_bundle_path").and_then(Value::as_str),
+        args.get("right_bundle_path").and_then(Value::as_str),
     ) else {
         return json!({"status": "error", "message": "Both bundle paths are required"});
     };
-
-    let left_data = match fs::read_to_string(left_path) {
-        Ok(data) => data,
-        Err(err) => {
-            return json!({"status": "error", "message": format!("Cannot read left bundle: {err}")});
+    let left = match read_comparable_bundle(left_path) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid left bundle: {error}")});
         }
     };
-    let right_data = match fs::read_to_string(right_path) {
-        Ok(data) => data,
-        Err(err) => {
-            return json!({"status": "error", "message": format!("Cannot read right bundle: {err}")});
+    let right = match read_comparable_bundle(right_path) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid right bundle: {error}")});
         }
     };
-
-    let left_val: Value = match serde_json::from_str(&left_data) {
-        Ok(value) => value,
-        Err(err) => {
-            return json!({"status": "error", "message": format!("Invalid left bundle JSON: {err}")});
-        }
-    };
-    let right_val: Value = match serde_json::from_str(&right_data) {
-        Ok(value) => value,
-        Err(err) => {
-            return json!({"status": "error", "message": format!("Invalid right bundle JSON: {err}")});
-        }
-    };
-
+    let left_sha256 = digest_value(&left);
+    let right_sha256 = digest_value(&right);
     json!({
         "status": "complete",
-        "left_records": left_val.get("records").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0),
-        "right_records": right_val.get("records").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0),
-        "identical": canonicalize_json(&left_val) == canonicalize_json(&right_val)
+        "comparison_scope": "canonical_bundle_content",
+        "left_records": left["records"].as_array().map_or(0, Vec::len),
+        "right_records": right["records"].as_array().map_or(0, Vec::len),
+        "identical": left_sha256 == right_sha256,
+        "left_sha256": left_sha256,
+        "right_sha256": right_sha256,
+        "evidence_semantic_parity_verified": false
     })
 }
 
@@ -659,6 +704,89 @@ mod tests {
         assert_eq!(failed["status"], "error");
         assert_eq!(get_record(&unique).unwrap()["observed"], true);
         fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn export_evidence_is_no_clobber_and_roundtrips_with_digest() {
+        let dir = std::env::temp_dir().join(format!(
+            "rea_export_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("bundle.json");
+        fs::write(&target, b"do not overwrite").unwrap();
+        assert_eq!(
+            export_evidence_bundle(&json!({"path": target}))["status"],
+            "error"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"do not overwrite");
+        let exported = export_evidence_bundle(&json!({"path": target, "overwrite": true}));
+        assert_eq!(exported["status"], "exported");
+        let imported = import_evidence_bundle(&json!({
+            "path": target,
+            "expected_sha256": exported["sha256"]
+        }));
+        assert_eq!(imported["status"], "imported");
+        assert_eq!(imported["digest_verified"], true);
+        assert_eq!(imported["authenticity_verified"], false);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_evidence_refuses_existing_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!(
+            "rea_export_link_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, b"personal").unwrap();
+        let link = dir.join("bundle.json");
+        symlink(&victim, &link).unwrap();
+        assert_eq!(export_evidence_bundle(&json!({"path": link}))["status"], "error");
+        assert_eq!(fs::read(&victim).unwrap(), b"personal");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compare_bundles_rejects_invalid_shape_and_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "rea_compare_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let left = dir.join("left.json");
+        let right = dir.join("right.json");
+        fs::write(&left, br#"{"irrelevant": true}"#).unwrap();
+        fs::write(&right, br#"{"records": [], "unknowns": []}"#).unwrap();
+        let args = json!({"left_bundle_path": left, "right_bundle_path": right});
+        assert_eq!(compare_bundles(&args)["status"], "error");
+        fs::File::create(&left)
+            .unwrap()
+            .set_len(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+            .unwrap();
+        assert_eq!(compare_bundles(&args)["status"], "error");
+        fs::write(&left, br#"{"records": [], "unknowns": []}"#).unwrap();
+        let compared = compare_bundles(&args);
+        assert_eq!(compared["status"], "complete");
+        assert_eq!(compared["identical"], true);
+        assert_eq!(compared["evidence_semantic_parity_verified"], false);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

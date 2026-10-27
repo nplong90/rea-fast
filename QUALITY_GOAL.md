@@ -192,3 +192,18 @@ based on tool counts or synthetic stub responses.
 - Record/unknown export arrays now sort by ID for reproducible content digests.
   Regression covers failed partial imports, mismatched digests, id conflicts
   and imported supplementary sections. Full Evidence authenticity remains open.
+
+### 2026-10-27 — bounded, no-clobber Evidence export and comparison
+
+- Stage and sync complete Evidence exports in an exclusive sibling file. With
+  `overwrite: false`, a hard-link publish refuses existing files and
+  symlinks atomically; explicit overwrite uses directory-entry rename rather
+  than writing through a destination symlink.
+- Bound the serialized export and bundle-comparison inputs to 64 MiB. Reject
+  bundles missing records/unknowns arrays rather than returning a misleading
+  identical result for empty or malformed data. Comparisons explicitly state
+  that Evidence semantic parity is not verified.
+- Regression coverage exercises no-clobber, Unix symlink safety, round-trip
+  hash agreement, oversized comparison and malformed bundle shape.
+- Full chain-of-custody verification and concurrent parent-directory attack
+  resistance are still pending.
