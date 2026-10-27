@@ -794,6 +794,10 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
             let (mut peer, _) = listener.accept().unwrap();
+            // Drain the client's GET first: closing with unread request data
+            // can cause a TCP reset on Windows before the response arrives.
+            let mut request = [0u8; 1024];
+            let _ = std::io::Read::read(&mut peer, &mut request).unwrap();
             std::io::Write::write_all(
                 &mut peer,
                 b"HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\n",
@@ -801,7 +805,8 @@ mod tests {
             .unwrap();
         });
         let result = fetch_cdp_targets(&format!("http://{addr}"));
-        assert!(result.unwrap_err().contains("2 MiB limit"));
+        let error = result.unwrap_err();
+        assert!(error.contains("2 MiB limit"), "unexpected CDP response error: {error}");
         server.join().unwrap();
     }
 
