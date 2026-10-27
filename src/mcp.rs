@@ -2189,10 +2189,7 @@ mod tests {
 
     #[test]
     fn direct_mcp_artifact_readers_refuse_oversized_inputs() {
-        let path = std::env::temp_dir().join(format!(
-            "rea_mcp_bound_{}.wasm",
-            std::process::id()
-        ));
+        let path = std::env::temp_dir().join(format!("rea_mcp_bound_{}.wasm", std::process::id()));
         let file = std::fs::File::create(&path).unwrap();
         file.set_len(MAX_LOCAL_ARTIFACT_BYTES + 1).unwrap();
         assert!(read_local_artifact(&path).is_err());
