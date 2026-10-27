@@ -1020,12 +1020,21 @@ mod tests {
         let server = std::thread::spawn(move || {
             let (mut peer, _) = listener.accept().unwrap();
             let mut request = [0u8; 2048];
-            let _ = std::io::Read::read(&mut peer, &mut request).unwrap();
-            std::io::Write::write_all(
-                &mut peer,
-                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n",
-            )
-            .unwrap();
+            let count = std::io::Read::read(&mut peer, &mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..count]);
+            let key = request
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("sec-websocket-key")
+                        .then_some(value.trim())
+                })
+                .expect("Test server must receive a WebSocket challenge");
+            let accept = websocket_accept_value(key);
+            let response = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+            );
+            std::io::Write::write_all(&mut peer, response.as_bytes()).unwrap();
             std::io::Write::write_all(&mut peer, &[0x81, 0x7f]).unwrap();
             std::io::Write::write_all(&mut peer, &u64::MAX.to_be_bytes()).unwrap();
         });
