@@ -226,3 +226,11 @@ based on tool counts or synthetic stub responses.
   executable plus manifest as a short-lived Actions artifact.
 - The artifact is explicitly marked `candidate_only`; release parity,
   bit-for-bit reproducibility, signing and performance gates are not satisfied.
+
+### 2026-10-27 — second verified MCP native route
+
+- The Linux/Windows real-process MCP smoke now calls native
+  `analyze_javascript_application` against the checked-in JS fixture, verifies
+  an actual JavaScriptApplicationGraph and at least two source modules, and
+  keeps the Electron analyzer smoke. These demonstrate **two** exercised native
+  routes, not comprehensive capability readiness or upstream parity.

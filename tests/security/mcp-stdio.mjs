@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 
 const args = process.argv.slice(2);
@@ -100,6 +101,24 @@ try {
   assert.equal(unavailableResult.result?.isError, true);
   assert.equal(JSON.parse(unavailableResult.result.content[0].text).status, 'unavailable');
 
+  // Independently exercise the native JS analyzer over the actual MCP pipe.
+  // This is route readiness on a fixture, not parity with upstream Evidence.
+  await write(JSON.stringify({
+    jsonrpc: '2.0', id: 8, method: 'tools/call',
+    params: {
+      name: 'analyze_javascript_application',
+      arguments: {
+        input_path: fileURLToPath(new URL('../fixtures/parity/js-basic/', import.meta.url)),
+      },
+    },
+  }) + '\n');
+  const jsResult = await nextResponse();
+  assert.equal(jsResult.id, 8);
+  assert.equal(jsResult.result?.isError, false, JSON.stringify(jsResult));
+  const graph = JSON.parse(jsResult.result.content[0].text);
+  assert.equal(graph.schema, 'JavaScriptApplicationGraph');
+  assert.ok(graph.nodes.filter((node) => node.kind === 'source-module').length >= 2);
+
   if (testOversize) {
     // Stream instead of allocating a 65 MiB string in the test process.
     const block = Buffer.alloc(1024 * 1024, 0x78);
@@ -108,13 +127,13 @@ try {
     await request('{"jsonrpc":"2.0","id":3,"method":"ping"}\n', null, 3);
   }
 
-  assert.equal(observed, testOversize ? 45 : 43);
+  assert.equal(observed, testOversize ? 46 : 44);
   child.stdin.end();
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, stderr);
   process.stdout.write(JSON.stringify({ status: 'pass', malformed_inputs: 35,
     oversized_stream_tested: testOversize, subsequent_ping_survived: true,
-    verified_mcp_native_route: 'analyze_electron_source',
+    verified_mcp_native_routes: ['analyze_electron_source', 'analyze_javascript_application'],
     invalid_request_and_params_rejected: 4,
     unavailable_tool_reports_isError: true }) + '\n');
 } catch (error) {
