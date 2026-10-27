@@ -126,7 +126,10 @@ pub fn export_evidence_bundle(args: &Value) -> Value {
         Some(path) if !path.is_empty() => path,
         _ => return json!({"status": "error", "message": "Missing 'path' argument"}),
     };
-    let overwrite = args.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+    let overwrite = args
+        .get("overwrite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let target = std::path::Path::new(path_str);
     let Some(name) = target.file_name() else {
         return json!({"status": "error", "message": "Invalid export destination"});
@@ -754,7 +757,10 @@ mod tests {
         fs::write(&victim, b"personal").unwrap();
         let link = dir.join("bundle.json");
         symlink(&victim, &link).unwrap();
-        assert_eq!(export_evidence_bundle(&json!({"path": link}))["status"], "error");
+        assert_eq!(
+            export_evidence_bundle(&json!({"path": link}))["status"],
+            "error"
+        );
         assert_eq!(fs::read(&victim).unwrap(), b"personal");
         fs::remove_dir_all(dir).unwrap();
     }
