@@ -106,3 +106,19 @@ jobs:
           path: js-benchmark-result.json
           retention-days: 7
           if-no-files-found: warn
+
+  browser-cdp:
+    name: Real Chrome CDP + MCP integration (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build MCP executable
+        run: cargo build --locked
+      - name: Verify Chrome executable exists
+        run: |
+          command -v google-chrome
+          google-chrome --version
+      - name: Run real headless Chrome integration
+        run: node tests/cdp/real-chrome.mjs --rust-bin "$GITHUB_WORKSPACE/target/debug/rea-fast"

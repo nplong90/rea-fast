@@ -337,3 +337,14 @@ based on tool counts or synthetic stub responses.
   and real binary-layout inspector refuse over-limit inputs.
 - This is a deliberate input limit, not full parser fuzz coverage or
   equivalence for very large binaries; P4 remains open.
+
+### 2026-10-27 — real headless Chromium CDP provider smoke
+
+- Ubuntu CI now launches an actual installed Google Chrome in headless mode
+  with a private temporary profile and a random debugging port. A separate
+  rea-fast MCP process must discover browser targets, evaluate `1 + 2`
+  through runtime CDP, and capture a real PNG screenshot. The test inspects
+  PNG magic bytes and compares the declared byte count to the saved file.
+- This tests the named read/evaluate/capture routes end to end on the runner,
+  not full CDP coverage, complete JS runtime provenance or Windows CDP.
+  Unavailable Chrome or any output mismatch fails the job.
