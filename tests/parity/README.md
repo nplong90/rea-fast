@@ -84,3 +84,28 @@ observed `handles` and `exposes` graph edges, but Rust does not currently
 reconstruct an equivalent graph. On this fixture, upstream produced 25 nodes
 and 33 edges. Matching the normalized syntax facts does **not** prove IPC
 reachability, preload ownership, sender security or execution equivalence.
+
+## Matched-task benchmark (opt-in, Linux)
+
+`tests/benchmark/run-js.mjs` invokes **both actual executables** on the
+same pinned ESM fixture. Every first/subsequent run must normalize and match
+both the checked-in golden and its counterpart before metrics are reported.
+It measures process wall time, GNU time direct-command user/sys CPU, direct
+child max RSS (KiB), and JSON stdout bytes. The first sample precedes warm
+samples; it does **not** purge page caches and is not a true cold-cache test.
+
+```sh
+cargo build --locked --release
+node tests/benchmark/run-js.mjs \
+  --rust-bin "$(pwd)/target/release/rea-fast" \
+  --upstream /absolute/path/to/pinned/rea --warm-runs 7
+```
+
+Output `measured_equivalent_subset` only verifies the *explicit JS module
+facts*, **not** the full upstream Evidence graph. Exit 2 and
+`not_comparable` for missing providers, wrong upstream revision, missing
+resource metrics, any failed command or any output mismatch. This runner
+does **not** claim accurate peak memory of the entire descendant process
+family, a page-cache-cleared cold start, or P5 release acceptance.
+The CI job runs only parser/gate self-tests; full upstream benchmark is
+opt-in and requires a pinned installed checkout.

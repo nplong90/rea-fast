@@ -15,13 +15,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const fixture = join(root, 'tests/fixtures/parity/js-basic');
 const golden = JSON.parse(readFileSync(join(root, 'tests/parity/js-basic.expected.json'), 'utf8'));
 const expectedUpstream = '6de60993b861266e63a4e70d5c6d9a8073f7cd92';
-const options = new Map();
-for (let i = 2; i < process.argv.length; i += 2) {
-  if (!process.argv[i]?.startsWith('--') || !process.argv[i + 1]) {
-    throw new Error('Usage: --rust-bin PATH --upstream DIR');
-  }
-  options.set(process.argv[i].slice(2), process.argv[i + 1]);
-}
 
 function exec(program, args, cwd) {
   const start = process.hrtime.bigint();
@@ -87,6 +80,14 @@ function finish(report, exitCode = 0) {
 }
 
 function run() {
+  const options = new Map();
+  for (let i = 2; i < process.argv.length; i += 2) {
+    if (!process.argv[i]?.startsWith('--') || !process.argv[i + 1]) {
+      throw new Error('Usage: --rust-bin PATH --upstream DIR');
+    }
+    options.set(process.argv[i].slice(2), process.argv[i + 1]);
+  }
+  
   const upstream = options.get('upstream');
   const rustBin = options.get('rust-bin');
   if (!upstream || !rustBin) throw new Error('Provide --rust-bin PATH and --upstream DIR');
@@ -131,4 +132,5 @@ function run() {
     performance: 'not_comparable_until_correctness_and_resource_metrics_are_verified' }, matched ? 0 : 1);
 }
 
-run();
+export { normalizeRust, normalizeUpstream, expectedUpstream, fixture, golden };
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) run();

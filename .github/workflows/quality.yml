@@ -41,6 +41,11 @@ jobs:
       - name: MCP oversize streaming and recovery (Linux)
         if: runner.os == 'Linux'
         run: node tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize
+      - name: Validate benchmark harness without claiming benchmark results
+        run: |
+          node --check tests/parity/compare-js.mjs
+          node --check tests/benchmark/run-js.mjs
+          node tests/benchmark/run-js.mjs --self-test
       - name: Build release candidate
         run: cargo build --locked --release
       - name: Validate and stage release candidate

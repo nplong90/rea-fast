@@ -245,3 +245,16 @@ based on tool counts or synthetic stub responses.
   Two regressions cover revision preservation and legacy hash ambiguity.
 - A future versioned ID migration is still needed to allow both colliding
   pairs to coexist without breaking existing imported references.
+
+### 2026-10-27 — opt-in matched-task benchmark harness (P5 partial)
+
+- Added `tests/benchmark/run-js.mjs` with independent real processes,
+  a pinned upstream HEAD requirement, interleaved first/subsequent samples
+  and a mandatory per-run golden parity check before reporting any metrics.
+- On Linux with GNU time, record wall clock, user/system CPU,
+  direct-process peak RSS and stdout bytes; report medians. Missing upstream,
+  failures, malformed resource reports or output mismatches all yield
+  `not_comparable`.
+- CI validates the parser, parity gate and script syntax, **not**
+  real upstream speed measurements. First-run cache state and full
+  process-family memory remain unmeasured; full P5 stays open.
