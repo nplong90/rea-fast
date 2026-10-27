@@ -26,7 +26,8 @@ const digest = createHash('sha256').update(data).digest('hex');
 const manifest = {
   status: 'candidate_only',
   verification: 'binary --version passed; production parity not verified',
-  git_commit: process.env.GITHUB_SHA ?? 'local-unpinned',
+  tested_git_commit: process.env.GITHUB_SHA ?? 'local-unpinned',
+  pr_head_commit: process.env.PR_HEAD_SHA ?? 'local-unpinned',
   operating_system: process.platform,
   architecture: process.arch,
   file: name,

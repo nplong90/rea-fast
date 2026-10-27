@@ -44,11 +44,13 @@ jobs:
       - name: Build release candidate
         run: cargo build --locked --release
       - name: Validate and stage release candidate
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node tests/release/stage.mjs
       - name: Upload commit-pinned release candidate
         uses: actions/upload-artifact@v4
         with:
-          name: rea-fast-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          name: rea-fast-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: dist-ci/
           retention-days: 7
           if-no-files-found: error
