@@ -3,6 +3,7 @@
 mod analyze;
 mod asar;
 pub mod bundle;
+pub mod capabilities;
 pub mod catalog;
 pub mod cdp;
 pub mod diff;

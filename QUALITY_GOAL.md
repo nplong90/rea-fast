@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
-| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | Pending |
+| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — conservative route labels; fixture verification pending |
 | P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | Pending |
 | P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | Pending |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
@@ -68,4 +68,22 @@ based on tool counts or synthetic stub responses.
   regression coverage, not proof of feature parity.
 - These changes reduce P0/P4 risks but do **not** establish complete parser
   fuzz coverage or managed-analysis parity with upstream.
+
+### 2026-10-27 — P2 MCP capability routing inventory
+
+- Classify every registered MCP catalog entry as `native`, `external-provider`
+  or `unavailable` based on source-level dispatch route inspection. Entries
+  without an audited route remain `unavailable` by default.
+- At this pinned revision: **63 native routes**, **53 provider-dependent
+  routes**, **129 unavailable**. These are implementation-route counts, not
+  tested compatibility scores.
+- Add capability class prefixes to MCP `tools/list` descriptions without
+  changing their schema. Add structured routing details and category totals
+  to `rea_search_tools` results.
+- Assert catalog completeness, unique tool names, explicit unsupported-stub
+  classification and search-result totals in Rust regression tests.
+- **Unverified:** runtime availability and upstream behavior equivalence.
+  Route presence does not establish task success or permission to operate a
+  device, browser or executable. P2 remains in progress until fixture-backed
+  verification of the classified routes is complete.
 

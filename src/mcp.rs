@@ -296,6 +296,7 @@ fn tool_list() -> Value {
     } else {
         crate::catalog::get_core_tools()
     };
+    let tools: Vec<Value> = tools.iter().map(crate::capabilities::advertise).collect();
     json!({
         "tools": tools
     })
@@ -310,10 +311,28 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             let matches = crate::catalog::search_tools(query);
+            let mut totals = [0usize; 3];
+            let tools: Vec<Value> = matches
+                .iter()
+                .map(|tool| {
+                    let name = tool["name"].as_str().unwrap_or("");
+                    match crate::capabilities::classify(name) {
+                        crate::capabilities::Capability::Native => totals[0] += 1,
+                        crate::capabilities::Capability::ExternalProvider => totals[1] += 1,
+                        crate::capabilities::Capability::Unavailable => totals[2] += 1,
+                    }
+                    crate::capabilities::annotate(tool)
+                })
+                .collect();
             Ok(json!({
                 "query": query,
-                "count": matches.len(),
-                "tools": matches
+                "count": tools.len(),
+                "capability_counts": {
+                    "native": totals[0],
+                    "external-provider": totals[1],
+                    "unavailable": totals[2]
+                },
+                "tools": tools
             }))
         }
         "rea_execute_tool" => {
@@ -1771,6 +1790,23 @@ mod tests {
         let search_args = json!({ "query": "electron" });
         let search_res = handle_tool_call("rea_search_tools", &search_args).unwrap();
         assert!(search_res["count"].as_u64().unwrap() > 0);
+        assert_eq!(
+            search_res["capability_counts"]["native"].as_u64().unwrap()
+                + search_res["capability_counts"]["external-provider"]
+                    .as_u64()
+                    .unwrap()
+                + search_res["capability_counts"]["unavailable"]
+                    .as_u64()
+                    .unwrap(),
+            search_res["count"].as_u64().unwrap()
+        );
+        assert!(
+            search_res["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|tool| { tool["rea_fast_capability"]["upstream_parity"] == "not_verified" })
+        );
 
         let exec_args = json!({
             "tool_name": "rea_search_tools",

@@ -22,7 +22,7 @@ provider support, or platform coverage as upstream.
 | Runtime | TypeScript/Node.js application and provider adapters | Rust CLI and stdio MCP |
 | JS/Electron static inspection | Extensive evidence-aware workflows | Native structural parser and analysis |
 | Native, managed, mobile and live targets | Multiple complete adapters and provider workflows | Some native inspectors; other tools need external programs or return explicit `unavailable` |
-| MCP tool inventory | Canonical tool contracts with capability/lifecycle handling | Embedded snapshot plus extra Rust tools; **name coverage is not functional parity** |
+| MCP tool inventory | Canonical tool contracts with capability/lifecycle handling | 245 catalog entries labeled `native`, `external-provider` or `unavailable` based on audited dispatch routes; **name coverage and route labels are not functional parity** |
 | Quality verification | Broad unit, boundary and integration suites | Rust unit tests; parity and real-provider tests are ongoing |
 | License | MIT at the upstream revision reviewed in October 2026 | MIT |
 
@@ -45,10 +45,10 @@ memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
 - **Dual Interface**:
   - Full CLI with 45 subcommands.
   - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`):
-    - **Core Profile (default)**: Exposes 43 lean native RE tools (~31 KB payload, ~7.7k tokens) designed for ultra-lean context windows, completely preventing prompt overflows and autocompact thrashing.
-    - **Dynamic Discovery & Execution**: Built-in meta-tools (`rea_search_tools`, `rea_execute_tool`) allow on-demand parameter discovery and execution of the complete 245-tool catalog without flooding the LLM context.
-    - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose the entire 245-tool catalog (sanitized & minified to ~195 KB, stripping redundant `outputSchema`).
-  - 100% standalone and independent: zero Node.js/npm runtime dependencies.
+    - **Core Profile (default)**: Exposes a curated smaller set of RE tool definitions for lower initial context use; some tools require external providers.
+    - **Dynamic Discovery & Execution**: `rea_search_tools` searches all 245 catalog entries and reports each tool's conservative route classification. `rea_execute_tool` attempts dispatch; it does **not** make unavailable or missing-provider functionality work.
+    - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose all 245 catalog entries. Tool descriptions indicate `native`, `external-provider` or `unavailable`, with upstream parity explicitly unverified.
+  - Rust core has no Node.js/npm runtime dependency; many optional integrations do require external tools or services.
   - Compile-time gzip schema ingestion (~316 KB embedded) with lazy runtime decompression (<2ms).
   - Raw TCP socket driver (20ms timeout) and structured diagnostic routing with native fallbacks for offline proprietary disassemblers (JEB, Ghidra, Hopper).
 - **Evidence store (partial)**: Deterministically ordered JSON digesting, in-memory SHA-256 records and Unknowns, plus bundle export/import. Full RFC 8785 number formatting, evidence authentication and reconstruction proofs remain open work.

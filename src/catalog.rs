@@ -59,7 +59,7 @@ fn meta_tools() -> Vec<Value> {
     vec![
         json!({
             "name": "rea_search_tools",
-            "description": "Search the full catalog of 245 reverse engineering tools by keyword or category.",
+            "description": "Search all 245 registered tools and inspect their implementation-route classification. Unavailable tools are included for discovery.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -73,7 +73,7 @@ fn meta_tools() -> Vec<Value> {
         }),
         json!({
             "name": "rea_execute_tool",
-            "description": "Dynamically execute any tool from the complete 245-tool catalog by name and arguments.",
+            "description": "Attempt to execute a registered tool. Many of the 245 catalog entries require an external provider or are unavailable; use rea_search_tools to inspect routing first.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
