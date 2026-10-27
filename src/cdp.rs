@@ -224,7 +224,7 @@ fn websocket_sha1(input: &[u8]) -> [u8; 20] {
         0x10325476,
         0xC3D2E1F0,
     ];
-    for chunk in data.chunks_exact(64) {
+    for chunk in data.as_chunks::<64>().0 {
         let mut words = [0u32; 80];
         for (i, word) in words.iter_mut().take(16).enumerate() {
             let at = i * 4;
@@ -258,7 +258,7 @@ fn websocket_sha1(input: &[u8]) -> [u8; 20] {
         }
     }
     let mut digest = [0u8; 20];
-    for (out, value) in digest.chunks_exact_mut(4).zip(h) {
+    for (out, value) in digest.as_chunks_mut::<4>().0.iter_mut().zip(h) {
         out.copy_from_slice(&value.to_be_bytes());
     }
     digest
