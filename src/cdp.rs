@@ -806,7 +806,10 @@ mod tests {
         });
         let result = fetch_cdp_targets(&format!("http://{addr}"));
         let error = result.unwrap_err();
-        assert!(error.contains("2 MiB limit"), "unexpected CDP response error: {error}");
+        assert!(
+            error.contains("2 MiB limit"),
+            "unexpected CDP response error: {error}"
+        );
         server.join().unwrap();
     }
 
