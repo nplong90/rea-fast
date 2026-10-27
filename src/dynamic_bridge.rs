@@ -711,7 +711,12 @@ mod tests {
 
     #[test]
     fn test_optional_bridge_execution() {
-        let res = DynamicBridge::run_optional_bridge("sh", "none", &["-c", "echo hello_bridge"], 5);
+        let (command, arguments): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd", &["/C", "echo hello_bridge"])
+        } else {
+            ("sh", &["-c", "echo hello_bridge"])
+        };
+        let res = DynamicBridge::run_optional_bridge(command, "none", arguments, 5);
         assert_eq!(res["status"], "ok");
         assert_eq!(res["exit_code"], 0);
         assert!(res["stdout"].as_str().unwrap().contains("hello_bridge"));
