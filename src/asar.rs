@@ -564,6 +564,7 @@ pub fn pack_asar(
 
     for rel_path in &regular_files {
         let full_path = canonical_src.join(rel_path);
+        #[cfg(unix)]
         let meta = fs::metadata(&full_path)?;
         let (size, hash) = stream_file_digest(&full_path, None)?;
 
