@@ -25,7 +25,9 @@ fn parse_cdp_content_length(headers: &str) -> Result<usize, String> {
             if length.is_some() {
                 return Err("Duplicate Content-Length in CDP response".to_string());
             }
-            let number: u64 = value.trim().parse()
+            let number: u64 = value
+                .trim()
+                .parse()
                 .map_err(|_| "Invalid Content-Length in CDP response".to_string())?;
             length = Some(checked_http_length(number)?);
         }
@@ -484,10 +486,7 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
             if let Some(out) = output_path {
                 let saved = (|| -> std::io::Result<()> {
                     use std::io::Write;
-                    let mut file = fs::File::options()
-                        .write(true)
-                        .create_new(true)
-                        .open(out)?;
+                    let mut file = fs::File::options().write(true).create_new(true).open(out)?;
                     file.write_all(&raw_bytes)?;
                     file.sync_all()
                 })();
@@ -696,9 +695,12 @@ pub fn export_web_scripts(args: &Value) -> Value {
             let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
             if !content.is_empty() {
                 let file_path = Path::new(out_dir).join(format!("inline_script_{i}.js"));
-                match fs::OpenOptions::new().write(true).create_new(true).open(&file_path) {
+                match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&file_path)
+                {
                     Ok(mut file) => {
-                        use std::io::Write;
                         if let Err(error) = file.write_all(content.as_bytes()) {
                             return json!({"status": "error", "message": format!("Cannot write script: {error}")});
                         }
@@ -746,8 +748,13 @@ mod tests {
 
     #[test]
     fn cdp_content_lengths_are_bounded_before_allocation() {
-        assert_eq!(parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n").unwrap(), 11);
-        assert!(parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n").is_err());
+        assert_eq!(
+            parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n").unwrap(),
+            11
+        );
+        assert!(
+            parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n").is_err()
+        );
         assert!(parse_cdp_content_length("Content-Length: 3\r\nContent-Length: 3").is_err());
         assert!(parse_cdp_content_length("Content-Length: nan").is_err());
         assert!(parse_cdp_content_length("HTTP/1.1 200 OK").is_err());
