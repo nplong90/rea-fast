@@ -145,6 +145,164 @@ pub fn list_electron_targets(args: &Value) -> Value {
     }
 }
 
+const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+fn secure_random_bytes(out: &mut [u8]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let mut source = fs::File::open("/dev/urandom")
+            .map_err(|e| format!("OS randomness unavailable: {e}"))?;
+        source
+            .read_exact(out)
+            .map_err(|e| format!("OS randomness failed: {e}"))
+    }
+    #[cfg(windows)]
+    {
+        #[link(name = "bcrypt")]
+        unsafe extern "system" {
+            fn BCryptGenRandom(
+                algorithm: *mut std::ffi::c_void,
+                buffer: *mut u8,
+                buffer_length: u32,
+                flags: u32,
+            ) -> i32;
+        }
+        let length = u32::try_from(out.len()).map_err(|_| "Random buffer too large")?;
+        // BCRYPT_USE_SYSTEM_PREFERRED_RNG; nonnegative NTSTATUS means success.
+        let status = unsafe {
+            BCryptGenRandom(std::ptr::null_mut(), out.as_mut_ptr(), length, 0x2)
+        };
+        if status < 0 {
+            Err(format!("Windows system randomness failed: {status}"))
+        } else {
+            Ok(())
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = out;
+        Err("Cryptographic OS random generator is unavailable on this platform".to_string())
+    }
+}
+
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for block in bytes.chunks(3) {
+        let value = (u32::from(block[0]) << 16)
+            | (u32::from(*block.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*block.get(2).unwrap_or(&0));
+        result.push(ALPHABET[((value >> 18) & 63) as usize] as char);
+        result.push(ALPHABET[((value >> 12) & 63) as usize] as char);
+        result.push(if block.len() >= 2 {
+            ALPHABET[((value >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        result.push(if block.len() >= 3 {
+            ALPHABET[(value & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    result
+}
+
+/// SHA-1 is used only for the RFC 6455 public handshake challenge.
+/// It is not a signature, password hash, or message authentication.
+fn websocket_sha1(input: &[u8]) -> [u8; 20] {
+    let mut data = input.to_vec();
+    let bits = (data.len() as u64).wrapping_mul(8);
+    data.push(0x80);
+    while data.len() % 64 != 56 {
+        data.push(0);
+    }
+    data.extend_from_slice(&bits.to_be_bytes());
+    let mut h = [0x67452301u32, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+    for chunk in data.chunks_exact(64) {
+        let mut words = [0u32; 80];
+        for (i, word) in words.iter_mut().take(16).enumerate() {
+            let at = i * 4;
+            *word = u32::from_be_bytes(chunk[at..at + 4].try_into().unwrap());
+        }
+        for i in 16..80 {
+            words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16])
+                .rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, word) in words.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A827999),
+                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+                _ => (b ^ c ^ d, 0xCA62C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        for (dst, value) in h.iter_mut().zip([a, b, c, d, e]) {
+            *dst = dst.wrapping_add(value);
+        }
+    }
+    let mut digest = [0u8; 20];
+    for (out, value) in digest.chunks_exact_mut(4).zip(h) {
+        out.copy_from_slice(&value.to_be_bytes());
+    }
+    digest
+}
+
+fn websocket_accept_value(key: &str) -> String {
+    let mut challenge = String::with_capacity(key.len() + WEBSOCKET_GUID.len());
+    challenge.push_str(key);
+    challenge.push_str(WEBSOCKET_GUID);
+    encode_base64(&websocket_sha1(challenge.as_bytes()))
+}
+
+fn validate_websocket_handshake(headers: &str, expected: &str) -> Result<(), String> {
+    let mut lines = headers.lines();
+    let status = lines.next().unwrap_or("").trim_end_matches('\r');
+    if !status.starts_with("HTTP/1.1 101 ") {
+        return Err("WebSocket upgrade did not return HTTP 101".to_string());
+    }
+    let mut accepted = None;
+    let mut upgraded = false;
+    let mut connection = false;
+    for line in lines {
+        if let Some((key, value)) = line.split_once(':') {
+            let name = key.trim().to_ascii_lowercase();
+            let value = value.trim();
+            match name.as_str() {
+                "sec-websocket-accept" => {
+                    if accepted.replace(value.to_string()).is_some() {
+                        return Err("Duplicate Sec-WebSocket-Accept".to_string());
+                    }
+                }
+                "upgrade" => upgraded = value.eq_ignore_ascii_case("websocket"),
+                "connection" => {
+                    connection = value
+                        .split(',')
+                        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+                }
+                _ => {}
+            }
+        }
+    }
+    if !upgraded || !connection || accepted.as_deref() != Some(expected) {
+        return Err("Invalid WebSocket upgrade headers or challenge response".to_string());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------
 // Native RFC 6455 WebSocket Client (Zero Dependency)
 // ---------------------------------------------------------
@@ -179,13 +337,17 @@ impl CdpSession {
             .set_write_timeout(Some(Duration::from_secs(10)))
             .unwrap_or(());
 
-        // Send HTTP WebSocket upgrade handshake
+        // RFC 6455 uses a fresh unpredictable 16-byte client challenge.
+        let mut challenge = [0u8; 16];
+        secure_random_bytes(&mut challenge)?;
+        let client_key = encode_base64(&challenge);
+        let expected_accept = websocket_accept_value(&client_key);
         let handshake = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host_port}\r\n\
              Upgrade: websocket\r\n\
              Connection: Upgrade\r\n\
-             Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Key: {client_key}\r\n\
              Sec-WebSocket-Version: 13\r\n\r\n"
         );
         stream
@@ -206,12 +368,7 @@ impl CdpSession {
         }
 
         let resp_str = String::from_utf8_lossy(&response_buf);
-        if !resp_str.contains("101 Switching Protocols") && !resp_str.contains("101 ") {
-            return Err(format!(
-                "WebSocket handshake rejected: {}",
-                resp_str.lines().next().unwrap_or("")
-            ));
-        }
+        validate_websocket_handshake(&resp_str, &expected_accept)?;
 
         Ok(Self { stream, next_id: 1 })
     }
@@ -223,7 +380,8 @@ impl CdpSession {
         let mut header = Vec::with_capacity(14);
         header.push(0x81); // FIN = 1, Opcode = 1 (Text)
 
-        let mask_key: [u8; 4] = [0x43, 0x44, 0x50, 0x31]; // "CDP1" mask
+        let mut mask_key = [0u8; 4];
+        secure_random_bytes(&mut mask_key)?;
         if len < 126 {
             header.push(0x80 | (len as u8));
         } else if len <= 65535 {
@@ -778,6 +936,29 @@ mod tests {
         assert_eq!(checked_ws_payload_len(123).unwrap(), 123);
         assert!(checked_ws_payload_len(MAX_CDP_WS_FRAME_BYTES + 1).is_err());
         assert!(checked_ws_payload_len(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn rfc_6455_accept_challenge_matches_standard_example() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let accept = websocket_accept_value(key);
+        assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+        let headers = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+        );
+        assert!(validate_websocket_handshake(&headers, &accept).is_ok());
+        assert!(validate_websocket_handshake(&headers, "forged").is_err());
+        assert!(validate_websocket_handshake("HTTP/1.1 101 Switching Protocols\r\n\r\n", &accept).is_err());
+    }
+
+    #[test]
+    fn websocket_challenge_and_mask_are_os_random() {
+        let mut key = [0u8; 16];
+        let mut mask = [0u8; 4];
+        secure_random_bytes(&mut key).unwrap();
+        secure_random_bytes(&mut mask).unwrap();
+        assert_eq!(encode_base64(&key).len(), 24);
+        assert_eq!(mask.len(), 4);
     }
 
     #[test]

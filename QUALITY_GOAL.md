@@ -369,3 +369,18 @@ based on tool counts or synthetic stub responses.
 - The real headless-Chrome MCP CI harness tests a deliberate thrown
   JavaScript error and asserts `isError: true` and structured status
   `error`, in addition to successful evaluation and a real PNG capture.
+
+### 2026-10-27 — RFC 6455 WebSocket challenge and masking
+
+- The CDP client now derives a fresh 16-byte handshake key from the
+  operating system CSPRNG (Unix `/dev/urandom` or Windows BCrypt)
+  and validates HTTP 101, Upgrade/Connection and the expected
+  `Sec-WebSocket-Accept` value. It refuses forged handshakes.
+- Every client-to-server data frame now uses a fresh four-byte mask rather
+  than a fixed known mask. RFC SHA-1 is used only to compute the public
+  upgrade challenge, not to authenticate a remote host.
+- Regression tests use the RFC 6455 known accept value. The real Chrome
+  integration job verifies interoperability after this change.
+- The transport remains plaintext WebSocket for local loopback CDP and
+  still lacks full fragmentation/control-frame/tls support. Full P4 stays
+  open until those limitations are addressed.
