@@ -42,7 +42,12 @@ impl OutputLog {
     }
 
     fn recent(&self, count: usize) -> Vec<String> {
-        self.records.iter().rev().take(count).map(|(_, line)| line.clone()).collect()
+        self.records
+            .iter()
+            .rev()
+            .take(count)
+            .map(|(_, line)| line.clone())
+            .collect()
     }
 }
 
@@ -107,7 +112,9 @@ fn get_sessions() -> &'static RwLock<HashMap<String, DebuggerSession>> {
 fn spawn_session(id: String, kind: &str, cmd: &str, args: &[&str]) -> Result<String, String> {
     let mut sessions = get_sessions().write().unwrap();
     if sessions.len() >= MAX_DEBUG_SESSIONS {
-        return Err(format!("Debugger session limit reached ({MAX_DEBUG_SESSIONS})"));
+        return Err(format!(
+            "Debugger session limit reached ({MAX_DEBUG_SESSIONS})"
+        ));
     }
     if sessions.contains_key(&id) {
         return Err("Debugger session ID already exists".to_string());
@@ -415,7 +422,10 @@ mod tests {
         assert_eq!(log.records.len(), MAX_DEBUG_LOG_LINES);
         assert_eq!(log.next_sequence, (MAX_DEBUG_LOG_LINES + 25) as u64);
         assert_eq!(log.since(log.next_sequence), Vec::<String>::new());
-        assert_eq!(log.recent(1), vec![format!("record-{}", MAX_DEBUG_LOG_LINES + 24)]);
+        assert_eq!(
+            log.recent(1),
+            vec![format!("record-{}", MAX_DEBUG_LOG_LINES + 24)]
+        );
     }
 
     #[test]
