@@ -322,6 +322,9 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
 
 pub fn record_unknown(args: &Value) -> Value {
     let question = args.get("question").and_then(|v| v.as_str()).unwrap_or("");
+    if question.trim().is_empty() {
+        return json!({"status": "error", "message": "Question must be non-empty"});
+    }
     let domain = args
         .get("domain")
         .and_then(|v| v.as_str())
@@ -352,6 +355,17 @@ pub fn record_unknown(args: &Value) -> Value {
     });
 
     let mut store = get_store().write().unwrap();
+    if let Some(existing) = store.unknowns.get(&unknown_id) {
+        // A repeated observation must not reset its revision or erase a
+        // previously recorded resolution. Detect ambiguous hash inputs too.
+        if existing["question"] == question && existing["domain"] == domain {
+            return existing.clone();
+        }
+        return json!({
+            "status": "error",
+            "message": "Unknown ID collision between different question/domain pairs"
+        });
+    }
     store.unknowns.insert(unknown_id.clone(), record.clone());
     record
 }
@@ -361,10 +375,21 @@ pub fn update_unknown(args: &Value) -> Value {
         Some(id) => id,
         None => return json!({ "status": "error", "message": "Missing unknown_id" }),
     };
-    let expected_rev = args
-        .get("expected_revision")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1);
+    let expected_rev = match args.get("expected_revision") {
+        None => 1,
+        Some(revision) => match revision.as_u64() {
+            Some(value) if value > 0 => value,
+            _ => {
+                return json!({
+                    "status": "error",
+                    "message": "expected_revision must be a positive integer"
+                });
+            }
+        },
+    };
+    if args.get("status").is_some_and(|value| !value.is_string()) {
+        return json!({"status": "error", "message": "status must be a string"});
+    }
 
     let mut store = get_store().write().unwrap();
     if let Some(existing) = store.unknowns.get_mut(unknown_id) {
@@ -793,6 +818,50 @@ mod tests {
         assert_eq!(compared["identical"], true);
         assert_eq!(compared["evidence_semantic_parity_verified"], false);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recording_an_existing_unknown_preserves_resolution_revision() {
+        let question = format!(
+            "Repeat unknown at {:?}",
+            std::time::SystemTime::now()
+        );
+        let first = record_unknown(&json!({"question": question, "domain": "quality"}));
+        let id = first["unknown_id"].as_str().unwrap();
+        let updated = update_unknown(&json!({
+            "unknown_id": id,
+            "expected_revision": 1,
+            "status": "resolved",
+            "resolution": {"note": "Evidence still requires verification"}
+        }));
+        assert_eq!(updated["revision"], 2);
+        assert_eq!(updated["status"], "resolved");
+
+        let repeated = record_unknown(&json!({"question": question, "domain": "quality"}));
+        assert_eq!(repeated["revision"], 2);
+        assert_eq!(repeated["status"], "resolved");
+        assert_eq!(repeated["resolution"], updated["resolution"]);
+
+        let rejected = update_unknown(&json!({
+            "unknown_id": id,
+            "expected_revision": "2",
+            "status": 123
+        }));
+        assert_eq!(rejected["status"], "error");
+        assert_eq!(list_unknowns(&json!({"domain": "quality"}))["total"], 1);
+    }
+
+    #[test]
+    fn ambiguous_unknown_id_is_not_silently_overwritten() {
+        // The current legacy digest encodes question + domain without a
+        // separator. Detect a collision rather than replacing existing data.
+        let first = record_unknown(&json!({"question": "re-ab", "domain": "c"}));
+        let second = record_unknown(&json!({"question": "re-a", "domain": "bc"}));
+        assert_eq!(second["status"], "error");
+        let stored = list_unknowns(&json!({"domain": "c"}));
+        assert!(stored["unknowns"].as_array().unwrap().iter().any(|entry| {
+            entry["unknown_id"] == first["unknown_id"]
+        }));
     }
 
     #[test]

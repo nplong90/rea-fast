@@ -234,3 +234,14 @@ based on tool counts or synthetic stub responses.
   an actual JavaScriptApplicationGraph and at least two source modules, and
   keeps the Electron analyzer smoke. These demonstrate **two** exercised native
   routes, not comprehensive capability readiness or upstream parity.
+
+### 2026-10-27 — unknown resolution lifecycle collision guard
+
+- `record_unknown` is now idempotent: repeating the same question/domain
+  cannot reset a resolved unknown to revision 1. Distinct question/domain pairs
+  that collide under the legacy concatenated digest are rejected rather than
+  silently overwriting evidence. Empty questions are rejected.
+- `update_unknown` rejects invalid revision and status types before mutation.
+  Two regressions cover revision preservation and legacy hash ambiguity.
+- A future versioned ID migration is still needed to allow both colliding
+  pairs to coexist without breaking existing imported references.
