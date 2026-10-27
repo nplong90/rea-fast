@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Read;
 use std::sync::{OnceLock, RwLock};
@@ -256,8 +256,12 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
     // Process each section in sequence so the mutable borrows do not overlap.
     let append_unique = |key: &str, destination: &mut Vec<Value>| {
         if let Some(items) = parsed.get(key).and_then(Value::as_array) {
+            // Canonical JSON is collision-free as a set key for JSON values,
+            // and avoids O(n^2) duplicate checks on untrusted bundle arrays.
+            let mut seen: HashSet<String> =
+                destination.iter().map(canonicalize_json).collect();
             for item in items {
-                if !destination.contains(item) {
+                if seen.insert(canonicalize_json(item)) {
                     destination.push(item.clone());
                 }
             }
@@ -637,6 +641,15 @@ mod tests {
                 .iter()
                 .any(|item| item["source"] == unique)
         );
+        let repeated = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(repeated["status"], "imported");
+        let duplicated = get_evidence_bundle(&json!({}))["scenarios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["source"] == unique)
+            .count();
+        assert_eq!(duplicated, 1);
 
         let conflicting = json!({
             "records": [{"evidence_id": unique, "observed": false}],
