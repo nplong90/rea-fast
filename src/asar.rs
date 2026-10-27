@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
@@ -459,6 +459,49 @@ impl AsarArchive {
 }
 
 static EXTRACT_COUNTER: AtomicU64 = AtomicU64::new(0);
+static PACK_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Hash or copy a file using a fixed-size buffer. The second pass must match
+/// the first pass byte-for-byte before the generated archive is published.
+fn stream_file_digest(
+    path: &Path,
+    mut destination: Option<&mut File>,
+) -> io::Result<(u64, String)> {
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "ASAR source must not be a symlink or special file: {}",
+                path.display()
+            ),
+        ));
+    }
+    let mut source = File::open(path)?;
+    if !source.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("ASAR source is not a regular file: {}", path.display()),
+        ));
+    }
+
+    let mut digest = Sha256::new();
+    let mut total_bytes = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = source.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total_bytes = total_bytes.checked_add(count as u64).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "ASAR source size overflow")
+        })?;
+        digest.update(&buffer[..count]);
+        if let Some(output) = destination.as_mut() {
+            output.write_all(&buffer[..count])?;
+        }
+    }
+    Ok((total_bytes, format!("{:x}", digest.finalize())))
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackResult {
@@ -522,9 +565,7 @@ pub fn pack_asar(
     for rel_path in &regular_files {
         let full_path = canonical_src.join(rel_path);
         let meta = fs::metadata(&full_path)?;
-        let size = meta.len();
-        let bytes = fs::read(&full_path)?;
-        let hash = format!("{:x}", Sha256::digest(&bytes));
+        let (size, hash) = stream_file_digest(&full_path, None)?;
 
         let node = serde_json::json!({
             "size": size,
@@ -546,52 +587,111 @@ pub fn pack_asar(
 
         let comps: Vec<&str> = rel_path
             .components()
-            .filter_map(|c| match c {
-                Component::Normal(s) => s.to_str(),
-                _ => None,
+            .map(|component| match component {
+                Component::Normal(name) => name.to_str().ok_or_else(|| {
+                    format!(
+                        "ASAR cannot represent a non-UTF-8 path: {}",
+                        rel_path.display()
+                    )
+                }),
+                _ => Err(format!(
+                    "ASAR source has an unsafe path: {}",
+                    rel_path.display()
+                )),
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         insert_file_node(&mut root_files, &comps, node);
 
-        files_to_write.push(full_path);
+        files_to_write.push((full_path, size, hash));
 
-        current_offset += size;
-        total_bytes += size;
+        current_offset = current_offset
+            .checked_add(size)
+            .ok_or("ASAR offset overflow")?;
+        total_bytes = total_bytes
+            .checked_add(size)
+            .ok_or("ASAR total size overflow")?;
     }
 
     let root_json = serde_json::json!({ "files": root_files });
     let json_str = serde_json::to_string(&root_json)?;
     let json_bytes = json_str.as_bytes();
-    let aligned_json = json_bytes.len().div_ceil(4) * 4;
-    let header_size = (8 + aligned_json) as u32;
+    let aligned_json = json_bytes
+        .len()
+        .div_ceil(4)
+        .checked_mul(4)
+        .ok_or("ASAR header overflow")?;
+    let header_size = u32::try_from(
+        8usize
+            .checked_add(aligned_json)
+            .ok_or("ASAR header overflow")?,
+    )?;
+    let json_len = u32::try_from(json_bytes.len())?;
 
-    if let Some(parent) = dest_asar.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    let parent = dest_asar
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let name = dest_asar
+        .file_name()
+        .ok_or("ASAR destination needs a file name")?;
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)?
+        .as_nanos();
+    let temp_path = parent.join(format!(
+        ".{}.rea-fast-{}-{}-{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        nanos,
+        PACK_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
 
-    let mut out = File::create(dest_asar)?;
-    out.write_all(&4u32.to_le_bytes())?;
-    out.write_all(&header_size.to_le_bytes())?;
-    out.write_all(&(header_size - 4).to_le_bytes())?;
-    out.write_all(&(json_bytes.len() as u32).to_le_bytes())?;
-    out.write_all(json_bytes)?;
+    let mut out = File::options()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)?;
+    let output_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        out.write_all(&4u32.to_le_bytes())?;
+        out.write_all(&header_size.to_le_bytes())?;
+        out.write_all(&(header_size - 4).to_le_bytes())?;
+        out.write_all(&json_len.to_le_bytes())?;
+        out.write_all(json_bytes)?;
+        let padding_needed = (8 + header_size as usize).saturating_sub(16 + json_bytes.len());
+        if padding_needed > 0 {
+            out.write_all(&vec![0u8; padding_needed])?;
+        }
 
-    let padding_needed = (8 + header_size as usize).saturating_sub(16 + json_bytes.len());
-    if padding_needed > 0 {
-        out.write_all(&vec![0u8; padding_needed])?;
-    }
-
-    for f in &files_to_write {
-        let file_bytes = fs::read(f)?;
-        out.write_all(&file_bytes)?;
-    }
-    out.flush()?;
+        // Re-check every file's length and digest while copying. If the source
+        // changed, do not publish an archive whose header claims stale hashes.
+        for (f, expected_size, expected_hash) in &files_to_write {
+            let (observed_size, observed_hash) = stream_file_digest(f, Some(&mut out))?;
+            if observed_size != *expected_size || observed_hash != *expected_hash {
+                return Err(format!("ASAR source changed during packing: {}", f.display()).into());
+            }
+        }
+        out.flush()?;
+        out.sync_all()?;
+        Ok(())
+    })();
     drop(out);
+    if let Err(error) = output_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
 
-    let asar_bytes = fs::read(dest_asar)?;
-    let asar_size = asar_bytes.len() as u64;
-    let asar_sha256 = format!("{:x}", Sha256::digest(&asar_bytes));
+    let (asar_size, asar_sha256) = match stream_file_digest(&temp_path, None) {
+        Ok(fingerprint) => fingerprint,
+        Err(error) => {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error.into());
+        }
+    };
+    // Create the final name atomically and refuse any pre-existing destination.
+    // The staging file lives beside the destination, so hard_link is same-FS.
+    let published = fs::hard_link(&temp_path, dest_asar);
+    let _ = fs::remove_file(&temp_path);
+    published?;
 
     Ok(PackResult {
         asar_path: dest_asar.to_string_lossy().to_string(),
@@ -742,6 +842,62 @@ mod tests {
             fs::read(outside.join("victim.txt")).unwrap(),
             b"do not alter"
         );
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn packing_never_overwrites_existing_archive() {
+        let scope = isolated_test_dir();
+        let source = scope.join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("index.js"), b"console.log('hello')").unwrap();
+        let target = scope.join("packed.asar");
+        fs::write(&target, b"personal content").unwrap();
+
+        assert!(pack_asar(&source, &target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"personal content");
+        assert_eq!(fs::read_dir(&scope).unwrap().count(), 2);
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn packing_rejects_non_utf8_names_instead_of_silently_omitting_them() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let scope = isolated_test_dir();
+        let source = scope.join("source");
+        fs::create_dir(&source).unwrap();
+        let invalid_name = std::ffi::OsString::from_vec(vec![b'a', 0xff]);
+        fs::write(source.join(invalid_name), b"unrepresentable").unwrap();
+        let target = scope.join("packed.asar");
+
+        assert!(pack_asar(&source, &target).is_err());
+        assert!(!target.exists());
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn streaming_packer_handles_file_larger_than_member_read_limit() {
+        let scope = isolated_test_dir();
+        let source = scope.join("source");
+        fs::create_dir(&source).unwrap();
+        let big_file = source.join("large.bin");
+        File::create(&big_file)
+            .unwrap()
+            .set_len(MAX_ASAR_ENTRY_BYTES + 1)
+            .unwrap();
+        let target = scope.join("packed.asar");
+
+        let result = pack_asar(&source, &target).unwrap();
+        assert_eq!(result.total_files, 1);
+        assert_eq!(result.total_bytes, MAX_ASAR_ENTRY_BYTES + 1);
+        assert_eq!(fs::metadata(&target).unwrap().len(), result.asar_size);
+        assert_eq!(stream_file_digest(&target, None).unwrap().1, result.sha256);
+
+        let archive = AsarArchive::open(&target).unwrap();
+        assert_eq!(archive.entries[0].size, MAX_ASAR_ENTRY_BYTES + 1);
+        assert!(archive.read_file(&archive.entries[0]).is_err());
         fs::remove_dir_all(scope).unwrap();
     }
 

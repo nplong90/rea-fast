@@ -43,6 +43,9 @@ memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
   Concurrent replacement of parent paths is not yet guarded by directory-FD
   relative operations, so extraction into shared writable directories is not
   claimed race-proof.
+- **Streamed ASAR packing**: Uses bounded 64 KiB buffers and verifies each
+  source member again while copying. Writes to an exclusive staging file and
+  publishes only after completion; it refuses an existing destination archive.
 - **Electron Fuse Detection**: Scans 32-byte sentinel patterns across ELF, PE, and Mach-O binaries to extract all 9 Electron fuses without runtime launching.
 - **AST-Based Bundle Recovery**: Unbundles Webpack chunks, Webpack IIFE, Browserify, and esbuild CommonJS wrappers into structured directories.
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.

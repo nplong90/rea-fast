@@ -41,8 +41,8 @@
 | --- | --- | --- | --- |
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
-| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — conservative route labels; fixture verification pending |
-| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS module and ASAR inventory subsets matched against real upstream |
+| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — 245 conservative route labels and a verified MCP Electron-source route |
+| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS, ASAR and Electron static subsets matched against real upstream |
 | P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | In progress — bounded MCP stdio requests, parser mutation tests |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
 
@@ -140,4 +140,31 @@ based on tool counts or synthetic stub responses.
 - This protects against static/pre-existing symlink paths; fully race-free
   extraction to a concurrently mutable destination requires further
   dirfd-relative/openat-style work. P4 remains in progress.
+
+### 2026-10-27 — streamed, non-clobbering ASAR packer
+
+- Avoid loading entire source members or the resulting archive into RAM while
+  packing: fixed 64 KiB stream buffers digest input, copy input, and fingerprint
+  the output. Compare the copy against the first-pass length/digest before
+  publishing the archive, rejecting changed source content.
+- Stage the archive in a unique, exclusively created sibling file, then publish
+  using a same-filesystem atomic hard link; an existing destination is never
+  truncated. Fail closed on overflow and invalid source paths.
+- Added tests for destination preservation and packing a sparse 64 MiB+1 member.
+  Fully hostile concurrent source modification and filesystem mutation remain
+  outside the verified threat model; do not claim race-free packing.
+
+### 2026-10-27 — Electron syntax parity and native MCP route smoke
+
+- Independently executed pinned upstream REA and rea-fast against a small
+  Electron main/preload/renderer fixture. Literal IPC direction/channel,
+  contextBridge API/methods, and BrowserWindow webPreferences matched the
+  checked-in golden. The upstream produced a 25-node, 33-edge graph that the
+  Rust structural graph does not yet reproduce. Matching this subset is **not**
+  full Electron application-graph or execution parity.
+- Added `tests/parity/compare-electron.mjs`; it reports `fixture_match`,
+  `fixture_mismatch` and `not_comparable` explicitly.
+- The black-box MCP smoke now calls `analyze_electron_source` through actual
+  `tools/call` and validates the returned IPC channel/operation. This verifies
+  one native route in practice, not all 63 native-labeled routes.
 

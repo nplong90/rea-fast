@@ -68,6 +68,23 @@ try {
   await write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
   await request('{"jsonrpc":"2.0","id":2,"method":"ping"}\n', null, 2);
 
+  // Prove an advertised native route actually executes over MCP, not merely
+  // that it appears in the tool catalog with a plausible description.
+  await write(JSON.stringify({
+    jsonrpc: '2.0', id: 4, method: 'tools/call', params: {
+      name: 'analyze_electron_source', arguments: {
+        path: 'fixture.js',
+        source: "const { ipcMain } = require('electron'); ipcMain.handle('fixture:test', () => true);",
+      },
+    },
+  }) + '\n');
+  const nativeResult = await nextResponse();
+  assert.equal(nativeResult.id, 4);
+  assert.equal(nativeResult.result?.isError, false);
+  const analysis = JSON.parse(nativeResult.result.content[0].text);
+  assert.equal(analysis.ipc[0].channel, 'fixture:test');
+  assert.equal(analysis.ipc[0].operation, 'handle');
+
   if (testOversize) {
     // Stream instead of allocating a 65 MiB string in the test process.
     const block = Buffer.alloc(1024 * 1024, 0x78);
@@ -76,12 +93,13 @@ try {
     await request('{"jsonrpc":"2.0","id":3,"method":"ping"}\n', null, 3);
   }
 
-  assert.equal(observed, testOversize ? 39 : 37);
+  assert.equal(observed, testOversize ? 40 : 38);
   child.stdin.end();
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, stderr);
   process.stdout.write(JSON.stringify({ status: 'pass', malformed_inputs: 35,
-    oversized_stream_tested: testOversize, subsequent_ping_survived: true }) + '\n');
+    oversized_stream_tested: testOversize, subsequent_ping_survived: true,
+    verified_mcp_native_route: 'analyze_electron_source' }) + '\n');
 } catch (error) {
   child.kill();
   process.stderr.write(`${error.stack ?? error}\n${stderr}\n`);

@@ -61,3 +61,26 @@ up after each run. This tests a common **inventory subset**; upstream's
 artifact-graph provenance, relationship semantics and verified read/extract
 claims exceed Rust's current `inspect-artifact` output and are not certified.
 The same 0/1/2 result statuses apply.
+
+## Electron IPC static fixture
+
+The `electron-ipc` fixture contains a main process, an isolated preload bridge,
+a renderer script and one HTML entry point. The runnable comparison evaluates:
+
+- The literal `ipcMain.handle` and `ipcRenderer.invoke` channel and direction.
+- `contextBridge.exposeInMainWorld` name and exposed method list.
+- `BrowserWindow` literal preload, `contextIsolation`, and `nodeIntegration`.
+
+```sh
+node tests/parity/compare-electron.mjs \
+  --rust-bin "$(pwd)/target/debug/rea-fast" \
+  --upstream /absolute/path/to/pinned/rea
+```
+
+Rust runs its explicit `analyze-electron` command on main/preload sources;
+upstream runs full `analyze-javascript-application`. The checked-in golden is
+`electron-ipc.expected.json`. The test also requires upstream to contain
+observed `handles` and `exposes` graph edges, but Rust does not currently
+reconstruct an equivalent graph. On this fixture, upstream produced 25 nodes
+and 33 edges. Matching the normalized syntax facts does **not** prove IPC
+reachability, preload ownership, sender security or execution equivalence.
