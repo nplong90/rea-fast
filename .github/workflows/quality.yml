@@ -59,3 +59,50 @@ jobs:
           path: dist-ci/
           retention-days: 7
           if-no-files-found: error
+
+  parity-benchmark:
+    name: Pinned upstream JS subset parity + measurement (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Build rea-fast release binary
+        run: cargo build --locked --release
+      - name: Checkout exact upstream commit
+        uses: actions/checkout@v4
+        with:
+          repository: morluto/rea
+          ref: 6de60993b861266e63a4e70d5c6d9a8073f7cd92
+          path: pinned-upstream
+          persist-credentials: false
+      - name: Install upstream locked dependencies
+        working-directory: pinned-upstream
+        run: npm ci --no-audit --no-fund
+      - name: Compile actual upstream implementation
+        working-directory: pinned-upstream
+        run: npm run build
+      - name: Verify real upstream parity before measuring
+        run: |
+          node tests/parity/compare-js.mjs \
+            --rust-bin "$GITHUB_WORKSPACE/target/release/rea-fast" \
+            --upstream "$GITHUB_WORKSPACE/pinned-upstream"
+      - name: Matched-task resource benchmark (3 subsequent runs)
+        shell: bash
+        run: |
+          set -o pipefail
+          node tests/benchmark/run-js.mjs \
+            --rust-bin "$GITHUB_WORKSPACE/target/release/rea-fast" \
+            --upstream "$GITHUB_WORKSPACE/pinned-upstream" \
+            --warm-runs 3 | tee js-benchmark-result.json
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-js-benchmark-${{ github.event.pull_request.head.sha || github.sha }}
+          path: js-benchmark-result.json
+          retention-days: 7
+          if-no-files-found: warn

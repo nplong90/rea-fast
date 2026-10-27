@@ -282,3 +282,15 @@ based on tool counts or synthetic stub responses.
   no raw secret disclosure and unknown revision transition.
 - This establishes **six native routes exercised end-to-end**, not
   that all 63 labeled native tools have provider readiness or upstream parity.
+
+### 2026-10-27 — real pinned upstream measurement in PR CI
+
+- Added a separate Ubuntu CI job that checks out the exact pinned
+  `morluto/rea` source commit, installs its locked npm dependencies,
+  builds both release implementations, asserts JS normalized parity
+  and executes the opt-in matched-task benchmark using actual programs.
+- Benchmark evidence is uploaded from the runner when available.
+  This job **fails** when upstream cannot be built, output diverges or
+  resource metrics cannot be obtained; it is not a mocked benchmark.
+- The normalized ESM subset and direct-command peak RSS remain narrower
+  than full Evidence equivalence and process-family memory acceptance.
