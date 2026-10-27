@@ -384,3 +384,13 @@ based on tool counts or synthetic stub responses.
 - The transport remains plaintext WebSocket for local loopback CDP and
   still lacks full fragmentation/control-frame/tls support. Full P4 stays
   open until those limitations are addressed.
+
+### 2026-10-28 — bounded entropy results
+
+- Avoid allocating an output JSON entry for every byte when
+  `inspect_byte_entropy` receives a 1-byte chunk size. The inspector now
+  computes the true `chunk_count` in O(1) and emits at most 64 sampled
+  chunk values, with `chunks_truncated: true` when applicable.
+- Regression fixture uses 16,384 one-byte chunks and asserts the true count,
+  output cap and offsets; resource-allocation pressure no longer follows
+  the total number of result chunks.

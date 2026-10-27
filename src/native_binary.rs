@@ -392,8 +392,11 @@ impl NativeInspector {
     pub fn inspect_byte_entropy(bytes: &[u8], chunk_size: usize) -> Value {
         let chunk_size = if chunk_size == 0 { 4096 } else { chunk_size };
         let overall_entropy = Self::calculate_entropy(bytes);
-        let mut chunk_entropies = Vec::new();
-        for (i, chunk) in bytes.chunks(chunk_size).enumerate() {
+        // Keep the public number of chunks, but never materialize an
+        // unbounded Vec<Value> when a caller chooses chunk_size = 1.
+        let chunk_count = bytes.len().div_ceil(chunk_size);
+        let mut chunk_entropies = Vec::with_capacity(chunk_count.min(64));
+        for (i, chunk) in bytes.chunks(chunk_size).take(64).enumerate() {
             chunk_entropies.push(json!({
                 "offset": i * chunk_size,
                 "size": chunk.len(),
@@ -414,9 +417,10 @@ impl NativeInspector {
             "total_bytes": bytes.len(),
             "overall_entropy": (overall_entropy * 1000.0).round() / 1000.0,
             "classification": classification,
-            "chunk_count": chunk_entropies.len(),
+            "chunk_count": chunk_count,
             "chunk_size": chunk_size,
-            "chunks": if chunk_entropies.len() > 64 { &chunk_entropies[..64] } else { &chunk_entropies[..] }
+            "chunks_truncated": chunk_count > 64,
+            "chunks": chunk_entropies
         })
     }
 
@@ -1037,6 +1041,18 @@ mod tests {
         assert!(read_bounded_artifact(&path).is_err());
         assert!(NativeInspector::inspect_layout(&path).is_err());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn entropy_sampling_caps_emitted_chunks_without_losing_true_count() {
+        let data = vec![b'X'; 16_384];
+        let value = NativeInspector::inspect_byte_entropy(&data, 1);
+        assert_eq!(value["total_bytes"], 16_384);
+        assert_eq!(value["chunk_count"], 16_384);
+        assert_eq!(value["chunks"].as_array().unwrap().len(), 64);
+        assert_eq!(value["chunks_truncated"], true);
+        assert_eq!(value["chunks"][0]["offset"], 0);
+        assert_eq!(value["chunks"][63]["offset"], 63);
     }
 
     #[test]
