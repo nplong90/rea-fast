@@ -318,3 +318,11 @@ based on tool counts or synthetic stub responses.
 - This exercises the protocol parser over real TCP transport, not a live
   browser/Chromium/CDP provider. WebSocket handshake cryptographic
   verification remains an explicitly unclosed P4 gate.
+
+### 2026-10-27 — seventh native MCP fixture: executable binary layout
+
+- Linux/Windows MCP child-process smoke now runs `inspect_binary_layout`
+  on the actual compiled rea-fast executable, independently hashes the
+  same bytes with Node SHA-256, and asserts parsed nonempty sections and
+  architecture. This is a **native route readiness** check for real ELF/PE
+  binaries, not a full native-binary Evidence graph upstream comparison.

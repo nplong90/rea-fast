@@ -4,6 +4,8 @@
  * nesting and (opt-in) >64 MiB untrusted input cannot end the stdio session.
  */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
@@ -157,6 +159,14 @@ try {
   assert.equal(updatedUnknown.status, 'resolved');
   assert.equal(updatedUnknown.revision, 2);
 
+  // Inspect the actual compiled executable, not a synthetic capability label.
+  // Verify the returned file digest against independent Node hashing.
+  const binaryPath = args[binaryIndex + 1];
+  const layout = await callNative(13, 'inspect_binary_layout', { path: binaryPath });
+  assert.equal(layout.sha256, createHash('sha256').update(readFileSync(binaryPath)).digest('hex'));
+  assert.ok(layout.total_sections > 0);
+  assert.ok(typeof layout.architecture === 'string' && layout.architecture.length > 0);
+
   if (testOversize) {
     // Stream instead of allocating a 65 MiB string in the test process.
     const block = Buffer.alloc(1024 * 1024, 0x78);
@@ -165,7 +175,7 @@ try {
     await request('{"jsonrpc":"2.0","id":3,"method":"ping"}\n', null, 3);
   }
 
-  assert.equal(observed, testOversize ? 50 : 48);
+  assert.equal(observed, testOversize ? 51 : 49);
   child.stdin.end();
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, stderr);
@@ -174,6 +184,7 @@ try {
     verified_mcp_native_routes: [
       'analyze_electron_source', 'analyze_javascript_application',
       'scan_secrets', 'compare_artifacts', 'record_unknown', 'update_unknown',
+      'inspect_binary_layout',
     ],
     invalid_request_and_params_rejected: 4,
     unavailable_tool_reports_isError: true }) + '\n');
