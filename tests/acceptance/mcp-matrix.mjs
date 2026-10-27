@@ -20,7 +20,7 @@ const child = spawn(binary, ['mcp'], {
   env: { ...process.env, REA_MCP_PROFILE: 'full' },
 });
 let errorText = '', id = 0, failure = null;
-const pending = new Map(), rows = [], verified = [];
+const pending = new Map(), rows = [], verified = [], extendedRoutes = [];
 child.stderr.on('data', (x) => { errorText = (errorText + x).slice(-2048); });
 child.on('error', (e) => {
   for (const handler of pending.values()) handler.reject(e);
@@ -71,7 +71,12 @@ async function call(name, arguments_, check) {
 }
 function record(name) {
   const entry = rows.find((r) => r.tool === name);
-  assert.ok(entry, 'Not in REA catalog: ' + name);
+  if (!entry) {
+    // Callable additional route, but explicitly not one of the 245 catalog
+    // contracts. Never inflate the number of verified catalog entries.
+    extendedRoutes.push(name);
+    return;
+  }
   assert.equal(entry.route, 'native', name + ' misclassified as non-native');
   entry.runtime = 'fixture_exercised';
   entry.proof = 'real_mcp_process_assertions';
@@ -235,6 +240,8 @@ try {
     tool_count: rows.length,
     route_counts: { native: tally('native'), 'external-provider': tally('external-provider'), unavailable: tally('unavailable') },
     fixture_exercised: rows.filter((x) => x.runtime === 'fixture_exercised').length,
+    additional_routes_exercised: extendedRoutes,
+    fixture_executions_total: verified.length,
     unverified: rows.filter((x) => x.runtime !== 'fixture_exercised').length,
     error: failure, tools: rows,
   };
@@ -243,6 +250,8 @@ try {
   console.log(JSON.stringify({
     status: summary.status, tool_count: summary.tool_count,
     route_counts: summary.route_counts, fixture_exercised: summary.fixture_exercised,
+    additional_routes_exercised: summary.additional_routes_exercised,
+    fixture_executions_total: summary.fixture_executions_total,
     unverified: summary.unverified, error: summary.error,
   }));
   child.kill();

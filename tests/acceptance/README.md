@@ -7,3 +7,5 @@ Run `node tests/acceptance/mcp-matrix.mjs --rust-bin target/debug/rea-fast`. The
 Matrix states: `not_tested` means no qualifying runtime fixture; `fixture_exercised` means the stated specific assertions passed. **Every row still has `upstream_parity: not_verified`** until a separate matched upstream comparator proves the same semantic contract. The report is deliberately `partial_acceptance` while substantial functionality remains unverified.
 
 **Release gate:** pass only if the required feature manifest has no `unavailable`, `not_tested`, `not_comparable` or `unverified` entries; full Evidence graph, provider lifecycle, security, and equivalent-output CPU/RSS/time must be verified. The current quality workflow is a regression gate, not a full release certificate. Do not merge PR #1 as complete while this release gate is blocked.
+
+The report separately lists `additional_routes_exercised` for callable REA-Fast extensions **absent from the 245-tool catalog**. These are not counted toward catalog readiness. Such entries reveal tool-discovery gaps and need an explicit publication decision; no fixture pass is promoted to upstream parity.
