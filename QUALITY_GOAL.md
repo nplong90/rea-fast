@@ -258,3 +258,17 @@ based on tool counts or synthetic stub responses.
 - CI validates the parser, parity gate and script syntax, **not**
   real upstream speed measurements. First-run cache state and full
   process-family memory remain unmeasured; full P5 stays open.
+
+### 2026-10-27 — bounded debugger sessions and truthful results
+
+- Cap active GDB/Rizin sessions at eight, retained output at 512 lines
+  per session and retained bytes per line at 8192, draining larger streams.
+- Track monotonic record sequence counters so log eviction cannot change the
+  meaning of a command's output cursor.
+- Only verified GDB MI `^done` yields command `complete`; the
+  prompt or elapsed time alone cannot. Rizin's 200 ms capture is returned
+  as `unverified`, not `complete` without a terminator.
+- Reap explicitly closed debugger child processes. Tests exercise sequence
+  eviction, unlimited line draining and completion-evidence semantics.
+- Live debugger process/provider verification and full timeout cleanup
+  remain open.
