@@ -536,14 +536,27 @@ pub fn evaluate_web_script(args: &Value) -> Value {
 
     match session.call("Runtime.evaluate", params) {
         Ok(res) => {
-            let inner_res = res.get("result").cloned().unwrap_or(json!({}));
+            if let Some(exception) = res.get("exceptionDetails") {
+                return json!({
+                    "status": "error",
+                    "message": "JavaScript evaluation raised an exception",
+                    "exception": exception,
+                    "expression": expression
+                });
+            }
+            let Some(inner_res) = res.get("result") else {
+                return json!({
+                    "status": "error",
+                    "message": "CDP Runtime.evaluate response has no result"
+                });
+            };
             json!({
                 "status": "complete",
                 "target_id": target_info.get("id"),
                 "target_title": target_info.get("title"),
                 "target_url": target_info.get("url"),
                 "expression": expression,
-                "result": inner_res.get("value").unwrap_or(&inner_res),
+                "result": inner_res.get("value").unwrap_or(inner_res),
                 "type": inner_res.get("type"),
             })
         }

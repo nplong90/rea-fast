@@ -88,6 +88,29 @@ try {
   });
   assert.equal(evaluated.status, 'complete');
   assert.equal(evaluated.result, 3);
+  // A JavaScript exception is a failed operation, not a verified result.
+  const thrown = await new Promise((resolve, reject) => {
+    const id = 4;
+    const timeout = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('CDP exception evaluation timed out'));
+    }, 15000);
+    pending.set(id, {
+      resolve: (value) => { clearTimeout(timeout); resolve(value); },
+      reject: (error) => { clearTimeout(timeout); reject(error); },
+    });
+    mcp.stdin.write(JSON.stringify({
+      jsonrpc: '2.0', id, method: 'tools/call',
+      params: {
+        name: 'evaluate_web_script',
+        arguments: { cdp_endpoint: endpoint, expression: 'throw new Error("fixture crash")' },
+      },
+    }) + '\n');
+  });
+  assert.equal(thrown.id, 4);
+  assert.equal(thrown.result?.isError, true, JSON.stringify(thrown));
+  assert.equal(JSON.parse(thrown.result.content[0].text).status, 'error');
+
   const screenshotResult = await callTool(3, 'capture_web_screenshot', {
     cdp_endpoint: endpoint, output_path: screenshot, format: 'png',
   });

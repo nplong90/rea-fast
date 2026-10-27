@@ -360,3 +360,12 @@ based on tool counts or synthetic stub responses.
   typed `CdpTarget` external-tool result.
 - Live browser evaluation/screenshot remain pending until the full
   Chrome integration job passes; do not infer success from this patch.
+
+### 2026-10-27 — real CDP JavaScript exception handling
+
+- `evaluate_web_script` now rejects CDP `Runtime.evaluate` responses
+  containing `exceptionDetails`, or missing the observed `result`
+  object, instead of labeling script errors as `complete`.
+- The real headless-Chrome MCP CI harness tests a deliberate thrown
+  JavaScript error and asserts `isError: true` and structured status
+  `error`, in addition to successful evaluation and a real PNG capture.
