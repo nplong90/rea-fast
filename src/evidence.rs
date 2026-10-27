@@ -3,7 +3,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::sync::{OnceLock, RwLock};
+
+const MAX_EVIDENCE_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Deterministic JSON encoding for locally stored evidence.
 /// This is not a complete RFC 8785 implementation (notably float formatting).
@@ -87,8 +90,10 @@ pub fn get_evidence_bundle(args: &Value) -> Value {
         .unwrap_or("complete");
     let store = get_store().read().unwrap();
 
-    let records_vec: Vec<Value> = store.records.values().cloned().collect();
-    let unknowns_vec: Vec<Value> = store.unknowns.values().cloned().collect();
+    let mut records_vec: Vec<Value> = store.records.values().cloned().collect();
+    let mut unknowns_vec: Vec<Value> = store.unknowns.values().cloned().collect();
+    records_vec.sort_by_key(|r| r["evidence_id"].as_str().unwrap_or("").to_string());
+    unknowns_vec.sort_by_key(|u| u["unknown_id"].as_str().unwrap_or("").to_string());
 
     if detail == "summary" {
         json!({
@@ -137,45 +142,123 @@ pub fn export_evidence_bundle(args: &Value) -> Value {
 }
 
 pub fn import_evidence_bundle(args: &Value) -> Value {
-    let path_str = match args.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return json!({ "status": "error", "message": "Missing 'path' argument" }),
+    let path_str = match args.get("path").and_then(Value::as_str) {
+        Some(path) => path,
+        None => return json!({"status": "error", "message": "Missing 'path' argument"}),
     };
-    let data = match fs::read_to_string(path_str) {
-        Ok(s) => s,
-        Err(e) => {
-            return json!({ "status": "error", "message": format!("Failed to read file: {e}") });
+    // A bounded streaming read also resists files growing after open.
+    let file = match fs::File::open(path_str) {
+        Ok(file) => file,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Cannot open bundle: {error}")});
         }
     };
+    let mut data = String::new();
+    if let Err(error) = file
+        .take(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+        .read_to_string(&mut data)
+    {
+        return json!({"status": "error", "message": format!("Cannot read bundle: {error}")});
+    }
+    if data.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return json!({"status": "error", "message": "Evidence bundle exceeds 64 MiB limit"});
+    }
     let parsed: Value = match serde_json::from_str(&data) {
-        Ok(v) => v,
-        Err(e) => return json!({ "status": "error", "message": format!("Invalid JSON: {e}") }),
+        Ok(value) => value,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid JSON: {error}")});
+        }
     };
+    if !parsed.is_object() {
+        return json!({"status": "error", "message": "Evidence bundle must be a JSON object"});
+    }
 
-    let mut store = get_store().write().unwrap();
-    let mut imported_records = 0;
-    if let Some(records) = parsed.get("records").and_then(|r| r.as_array()) {
-        for rec in records {
-            if let Some(id) = rec.get("evidence_id").and_then(|s| s.as_str()) {
-                store.records.insert(id.to_string(), rec.clone());
-                imported_records += 1;
+    let digest = digest_value(&parsed);
+    if args.get("expected_sha256").is_some_and(|value| !value.is_string()) {
+        return json!({"status": "error", "message": "expected_sha256 must be a string"});
+    }
+    let expected = args.get("expected_sha256").and_then(Value::as_str);
+    if expected.is_some_and(|value| !value.eq_ignore_ascii_case(&digest)) {
+        return json!({
+            "status": "error",
+            "message": "Evidence bundle SHA-256 mismatch",
+            "observed_sha256": digest
+        });
+    }
+
+    let records = match parsed.get("records").and_then(Value::as_array) {
+        Some(records) => records,
+        None => return json!({"status": "error", "message": "Missing/invalid records array"}),
+    };
+    let unknowns = match parsed.get("unknowns").and_then(Value::as_array) {
+        Some(unknowns) => unknowns,
+        None => return json!({"status": "error", "message": "Missing/invalid unknowns array"}),
+    };
+    let mut imported_records = HashMap::<String, Value>::new();
+    let mut imported_unknowns = HashMap::<String, Value>::new();
+    for (entries, key, out) in [
+        (records, "evidence_id", &mut imported_records),
+        (unknowns, "unknown_id", &mut imported_unknowns),
+    ] {
+        for entry in entries {
+            let Some(id) = entry
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+            else {
+                return json!({"status": "error", "message": format!("Evidence entry missing {key}")});
+            };
+            if out.insert(id.to_string(), entry.clone()).is_some() {
+                return json!({"status": "error", "message": format!("Duplicate bundle ID: {id}")});
             }
         }
     }
-    let mut imported_unknowns = 0;
-    if let Some(unknowns) = parsed.get("unknowns").and_then(|u| u.as_array()) {
-        for unk in unknowns {
-            if let Some(id) = unk.get("unknown_id").and_then(|s| s.as_str()) {
-                store.unknowns.insert(id.to_string(), unk.clone());
-                imported_unknowns += 1;
+
+    for section in ["scenarios", "captures", "artifacts", "providers", "environments"] {
+        if parsed.get(section).is_some_and(|value| !value.is_array()) {
+            return json!({"status": "error", "message": format!("Invalid {section} array")});
+        }
+    }
+
+    let mut store = get_store().write().unwrap();
+    for (id, record) in &imported_records {
+        if store.records.get(id).is_some_and(|existing| existing != record) {
+            return json!({"status": "error", "message": format!("Conflicting evidence ID: {id}")});
+        }
+    }
+    for (id, unknown) in &imported_unknowns {
+        if store.unknowns.get(id).is_some_and(|existing| existing != unknown) {
+            return json!({"status": "error", "message": format!("Conflicting unknown ID: {id}")});
+        }
+    }
+    // No mutation until the full bundle and every existing-ID collision are checked.
+    let record_count = imported_records.len();
+    let unknown_count = imported_unknowns.len();
+    store.records.extend(imported_records);
+    store.unknowns.extend(imported_unknowns);
+    for (key, destination) in [
+        ("scenarios", &mut store.scenarios),
+        ("captures", &mut store.captures),
+        ("artifacts", &mut store.artifacts),
+        ("providers", &mut store.providers),
+        ("environments", &mut store.environments),
+    ] {
+        if let Some(items) = parsed.get(key).and_then(Value::as_array) {
+            for item in items {
+                if !destination.contains(item) {
+                    destination.push(item.clone());
+                }
             }
         }
     }
 
     json!({
         "status": "imported",
-        "imported_records": imported_records,
-        "imported_unknowns": imported_unknowns
+        "imported_records": record_count,
+        "imported_unknowns": unknown_count,
+        "sha256": digest,
+        "digest_verified": expected.is_some(),
+        "authenticity_verified": false
     })
 }
 
@@ -488,6 +571,66 @@ pub fn find_changed_behavior(args: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evidence_import_rejects_invalid_data_without_partial_mutation() {
+        let unique = format!(
+            "ev_import_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let file = std::env::temp_dir().join(format!("{unique}.json"));
+        let invalid = json!({
+            "records": [{"evidence_id": unique}, {"bad": "missing id"}],
+            "unknowns": []
+        });
+        fs::write(&file, canonicalize_json(&invalid)).unwrap();
+        let failed = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(failed["status"], "error");
+        assert!(get_record(&unique).is_none());
+
+        let valid = json!({
+            "records": [{"evidence_id": unique, "observed": true}],
+            "unknowns": [],
+            "scenarios": [{"source": unique}]
+        });
+        fs::write(&file, canonicalize_json(&valid)).unwrap();
+        let mismatched = import_evidence_bundle(&json!({
+            "path": file,
+            "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }));
+        assert_eq!(mismatched["status"], "error");
+        assert!(get_record(&unique).is_none());
+
+        let imported = import_evidence_bundle(&json!({
+            "path": file,
+            "expected_sha256": digest_value(&valid)
+        }));
+        assert_eq!(imported["status"], "imported");
+        assert_eq!(imported["digest_verified"], true);
+        assert_eq!(imported["authenticity_verified"], false);
+        assert_eq!(get_record(&unique).unwrap()["observed"], true);
+        assert!(
+            get_evidence_bundle(&json!({}))["scenarios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["source"] == unique)
+        );
+
+        let conflicting = json!({
+            "records": [{"evidence_id": unique, "observed": false}],
+            "unknowns": []
+        });
+        fs::write(&file, canonicalize_json(&conflicting)).unwrap();
+        let failed = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(failed["status"], "error");
+        assert_eq!(get_record(&unique).unwrap()["observed"], true);
+        fs::remove_file(file).unwrap();
+    }
 
     #[test]
     fn test_canonical_json_sorting() {

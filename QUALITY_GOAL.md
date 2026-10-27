@@ -180,3 +180,15 @@ based on tool counts or synthetic stub responses.
   set MCP `isError: true`, rather than marking a non-result as success.
 - Added real-process protocol regressions on Windows and Linux. This is a P0
   correctness improvement, not a claim that all providers work.
+
+### 2026-10-27 — bounded and atomic Evidence bundle imports
+
+- Bundle imports now cap reads at 64 MiB, validate required arrays and IDs,
+  reject duplicates and conflicting existing records before touching the store.
+  Additional provenance sections are imported rather than silently discarded.
+- Optional `expected_sha256` verifies the canonical SHA-256 from export. A
+  caller-supplied hash is not authenticated provenance; the response explicitly
+  reports `authenticity_verified: false`.
+- Record/unknown export arrays now sort by ID for reproducible content digests.
+  Regression covers failed partial imports, mismatched digests, id conflicts
+  and imported supplementary sections. Full Evidence authenticity remains open.
