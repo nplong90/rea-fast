@@ -504,10 +504,32 @@ impl DynamicBridge {
     // ==========================================
 
     pub fn find_in_path(bin: &str) -> Option<PathBuf> {
+        #[cfg(windows)]
+        let mut names = vec![bin.to_string()];
+        #[cfg(not(windows))]
+        let names = [bin.to_string()];
+        // Unlike Unix, Windows PATH lookups use PATHEXT. Without this, native
+        // executables such as cmd.exe, adb.exe and gdb.exe are falsely reported
+        // as unavailable when callers supply their ordinary extensionless names.
+        #[cfg(windows)]
+        if PathBuf::from(bin).extension().is_none() {
+            let extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+            for ext in extensions.split(';').filter(|ext| !ext.is_empty()) {
+                let ext = if ext.starts_with('.') {
+                    ext.to_string()
+                } else {
+                    format!(".{ext}")
+                };
+                names.push(format!("{bin}{ext}"));
+            }
+        }
         env::var_os("PATH").and_then(|paths| {
-            env::split_paths(&paths)
-                .map(|p| p.join(bin))
-                .find(|p| p.is_file())
+            env::split_paths(&paths).find_map(|directory| {
+                names
+                    .iter()
+                    .map(|name| directory.join(name))
+                    .find(|p| p.is_file())
+            })
         })
     }
 
@@ -720,5 +742,17 @@ mod tests {
         assert_eq!(res["status"], "ok");
         assert_eq!(res["exit_code"], 0);
         assert!(res["stdout"].as_str().unwrap().contains("hello_bridge"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_pathext_resolves_cmd() {
+        let path = DynamicBridge::find_in_path("cmd").expect("cmd.exe should be on Windows PATH");
+        assert!(path.is_file());
+        assert!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        );
     }
 }
