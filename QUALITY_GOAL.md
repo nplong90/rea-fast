@@ -168,3 +168,15 @@ based on tool counts or synthetic stub responses.
   `tools/call` and validates the returned IPC channel/operation. This verifies
   one native route in practice, not all 63 native-labeled routes.
 
+
+### 2026-10-27 — JSON-RPC request validation and honest MCP error signals
+
+- Valid JSON with an invalid JSON-RPC envelope returns `-32600` rather
+  than pretending it is a syntax parse error or dropping an invalid request.
+  Malformed JSON still uses `-32700`, and valid notifications stay silent.
+- `tools/call` rejects a missing/empty name, non-object arguments and invalid
+  params with `-32602` before invoking a tool.
+- Tools explicitly returning `status: unavailable` or `status: error` now
+  set MCP `isError: true`, rather than marking a non-result as success.
+- Added real-process protocol regressions on Windows and Linux. This is a P0
+  correctness improvement, not a claim that all providers work.

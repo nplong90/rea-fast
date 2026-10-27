@@ -63,6 +63,11 @@ try {
   for (let length = 1; length <= 32; length += 1) {
     await request(`{"${'x'.repeat(length)}\n`, -32700);
   }
+  // Valid JSON but invalid JSON-RPC envelopes must never execute.
+  await request('[]\n', -32600);
+  await request('{"jsonrpc":"1.0","id":5,"method":"ping"}\n', -32600, 5);
+  await request('{"jsonrpc":"2.0","id":true,"method":"ping"}\n', -32600);
+  await request('{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"scan_secrets","arguments":[]}}\n', -32602, 6);
   await request('{"jsonrpc":"2.0","id":1,"method":"ping"}\n', null, 1);
   // JSON-RPC notifications do not produce an output line.
   await write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
@@ -85,6 +90,16 @@ try {
   assert.equal(analysis.ipc[0].channel, 'fixture:test');
   assert.equal(analysis.ipc[0].operation, 'handle');
 
+  // An explicit unsupported engine must not be marked successful in MCP.
+  await write(JSON.stringify({
+    jsonrpc: '2.0', id: 7, method: 'tools/call',
+    params: { name: 'decompile_jeb_item', arguments: {} },
+  }) + '\n');
+  const unavailableResult = await nextResponse();
+  assert.equal(unavailableResult.id, 7);
+  assert.equal(unavailableResult.result?.isError, true);
+  assert.equal(JSON.parse(unavailableResult.result.content[0].text).status, 'unavailable');
+
   if (testOversize) {
     // Stream instead of allocating a 65 MiB string in the test process.
     const block = Buffer.alloc(1024 * 1024, 0x78);
@@ -93,13 +108,15 @@ try {
     await request('{"jsonrpc":"2.0","id":3,"method":"ping"}\n', null, 3);
   }
 
-  assert.equal(observed, testOversize ? 40 : 38);
+  assert.equal(observed, testOversize ? 45 : 43);
   child.stdin.end();
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, stderr);
   process.stdout.write(JSON.stringify({ status: 'pass', malformed_inputs: 35,
     oversized_stream_tested: testOversize, subsequent_ping_survived: true,
-    verified_mcp_native_route: 'analyze_electron_source' }) + '\n');
+    verified_mcp_native_route: 'analyze_electron_source',
+    invalid_request_and_params_rejected: 4,
+    unavailable_tool_reports_isError: true }) + '\n');
 } catch (error) {
   child.kill();
   process.stderr.write(`${error.stack ?? error}\n${stderr}\n`);

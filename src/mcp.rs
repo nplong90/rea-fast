@@ -1655,22 +1655,51 @@ pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let req: JsonRpcRequest = match serde_json::from_str(trimmed) {
-            Ok(r) => r,
+        // A syntactically valid JSON document is not necessarily a valid
+        // JSON-RPC request. Keep -32700 for malformed JSON and use -32600
+        // for invalid envelopes, without executing any method.
+        let parsed: Value = match serde_json::from_str(trimmed) {
+            Ok(value) => value,
             Err(_) => {
                 let err = json!({
                     "jsonrpc": "2.0",
                     "id": Value::Null,
-                    "error": {
-                        "code": -32700,
-                        "message": "Parse error"
-                    }
+                    "error": {"code": -32700, "message": "Parse error"}
                 });
                 writeln!(stdout, "{}", serde_json::to_string(&err)?)?;
                 stdout.flush()?;
                 continue;
             }
         };
+        let valid_id = parsed
+            .get("id")
+            .filter(|id| id.is_null() || id.is_number() || id.is_string())
+            .cloned()
+            .unwrap_or(Value::Null);
+        let valid_request = parsed.is_object()
+            && parsed.get("jsonrpc").and_then(Value::as_str) == Some("2.0")
+            && parsed
+                .get("method")
+                .and_then(Value::as_str)
+                .is_some_and(|method| !method.is_empty())
+            && parsed
+                .get("id")
+                .is_none_or(|id| id.is_null() || id.is_number() || id.is_string())
+            && parsed
+                .get("params")
+                .is_none_or(|params| params.is_object() || params.is_array());
+        if !valid_request {
+            let err = json!({
+                "jsonrpc": "2.0",
+                "id": valid_id,
+                "error": {"code": -32600, "message": "Invalid Request"}
+            });
+            writeln!(stdout, "{}", serde_json::to_string(&err)?)?;
+            stdout.flush()?;
+            continue;
+        }
+        // Envelope shape is validated above; serde only projects its fields.
+        let req: JsonRpcRequest = serde_json::from_value(parsed)?;
 
         // JSON-RPC 2.0 §4.1: Notifications have no id and must not receive a response
         let id = match req.id {
@@ -1720,17 +1749,37 @@ pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
             }
             "tools/call" => {
                 let params = req.params.unwrap_or(Value::Null);
-                let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let arguments = params.get("arguments").unwrap_or(&Value::Null);
+                if !params.is_object()
+                    || !params
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| !name.is_empty())
+                    || params.get("arguments").is_some_and(|args| !args.is_object())
+                {
+                    let err = json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": {"code": -32602, "message": "Invalid tools/call params"}
+                    });
+                    writeln!(stdout, "{}", serde_json::to_string(&err)?)?;
+                    stdout.flush()?;
+                    continue;
+                }
+                let tool_name = params["name"].as_str().unwrap_or("");
+                let empty_args = json!({});
+                let arguments = params.get("arguments").unwrap_or(&empty_args);
 
                 let res = handle_tool_call(tool_name, arguments);
                 let tool_result = match res {
                     Ok(val) => ToolResult {
+                        is_error: matches!(
+                            val.get("status").and_then(Value::as_str),
+                            Some("unavailable" | "error")
+                        ),
                         content: vec![ToolContent {
                             content_type: "text",
                             text: serde_json::to_string_pretty(&val).unwrap_or_default(),
                         }],
-                        is_error: false,
                     },
                     Err(err_msg) => ToolResult {
                         content: vec![ToolContent {
