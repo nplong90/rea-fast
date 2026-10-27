@@ -42,8 +42,8 @@
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
 | P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — conservative route labels; fixture verification pending |
-| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | Pending |
-| P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | Pending |
+| P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS module subset matched against real upstream |
+| P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | In progress — bounded MCP stdio requests, parser mutation tests |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
 
 The quality goal is **not complete** until all gates above are evidenced. A
@@ -94,4 +94,25 @@ based on tool counts or synthetic stub responses.
   duplicate module paths instead of silently dropping those records and
   potentially returning a misleading empty diff.
 - Added negative-input regression coverage for both comparison entry points.
+
+### 2026-10-27 — real upstream JS parity and MCP resource bound
+
+- Built and executed upstream REA `6de60993...` and rea-fast on the same
+  self-contained ESM fixture. Both independently returned identical exact
+  source paths, SHA-256 content digests, named exports and static import edge,
+  also matching the checked-in golden data.
+- Added an opt-in Node parity runner (`tests/parity/compare-js.mjs`) with
+  explicit `fixture_match`, `fixture_mismatch`, and `not_comparable` states.
+  An upstream process-ownership failure initially made the test not comparable;
+  running with working `ps` support allowed the actual upstream process to
+  complete. No upstream mock or synthetic pass was used.
+- MCP stdio line reading now limits individual requests to 64 MiB and drains
+  oversized requests before reading the next line, returning a JSON-RPC error
+  instead of allocating unbounded input memory. Invalid UTF-8 also produces a
+  parse error without terminating the server. Added boundary regression tests
+  and a real-process Node smoke harness covering malformed/deep/invalid-UTF-8
+  input, notifications, session recovery, and optional streamed >64 MiB input.
+  CI runs the protocol smoke on Linux/Windows and streamed limit check on Linux.
+- Neither one fixture nor one uncontrolled timing observation establishes
+  full parity, resource safety or faster equivalent-task performance.
 

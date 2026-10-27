@@ -49,6 +49,10 @@ memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
     - **Dynamic Discovery & Execution**: `rea_search_tools` searches all 245 catalog entries and reports each tool's conservative route classification. `rea_execute_tool` attempts dispatch; it does **not** make unavailable or missing-provider functionality work.
     - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose all 245 catalog entries. Tool descriptions indicate `native`, `external-provider` or `unavailable`, with upstream parity explicitly unverified.
   - Rust core has no Node.js/npm runtime dependency; many optional integrations do require external tools or services.
+  - Individual MCP stdio requests are capped at 64 MiB. Oversized lines are
+    drained with a JSON-RPC error; send large artifacts by file path. The
+    black-box protocol regression is runnable with `node
+    tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize`.
   - Compile-time gzip schema ingestion (~316 KB embedded) with lazy runtime decompression (<2ms).
   - Raw TCP socket driver (20ms timeout) and structured diagnostic routing with native fallbacks for offline proprietary disassemblers (JEB, Ghidra, Hopper).
 - **Evidence store (partial)**: Deterministically ordered JSON digesting, in-memory SHA-256 records and Unknowns, plus bundle export/import. Full RFC 8785 number formatting, evidence authentication and reconstruction proofs remain open work.

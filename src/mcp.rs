@@ -1572,17 +1572,85 @@ fn extract_args_list(args: &Value) -> Vec<String> {
     }
 }
 
+/// Bound stdio JSON-RPC memory even if a client never sends a newline.
+/// Large artifacts should be supplied by path rather than inlined in MCP.
+const MAX_MCP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+
+enum BoundedLine {
+    Line(Vec<u8>),
+    Oversize,
+}
+
+fn read_bounded_line<R: BufRead>(reader: &mut R, limit: usize) -> io::Result<Option<BoundedLine>> {
+    let mut line = Vec::new();
+    let mut oversized = false;
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return Ok(if oversized {
+                Some(BoundedLine::Oversize)
+            } else if line.is_empty() {
+                None
+            } else {
+                Some(BoundedLine::Line(line))
+            });
+        }
+
+        let newline = buffer.iter().position(|byte| *byte == b'\n');
+        let data_len = newline.unwrap_or(buffer.len());
+        if !oversized {
+            if data_len > limit.saturating_sub(line.len()) {
+                oversized = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&buffer[..data_len]);
+            }
+        }
+        reader.consume(data_len + usize::from(newline.is_some()));
+        if newline.is_some() {
+            return Ok(Some(if oversized {
+                BoundedLine::Oversize
+            } else {
+                BoundedLine::Line(line)
+            }));
+        }
+    }
+}
+
 pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
+    let mut input = stdin.lock();
 
-    for line in stdin.lock().lines() {
-        let line = match line {
-            Ok(l) => l,
+    loop {
+        let line = match read_bounded_line(&mut input, MAX_MCP_REQUEST_BYTES) {
+            Ok(Some(BoundedLine::Line(line))) => line,
+            Ok(Some(BoundedLine::Oversize)) => {
+                let err = json!({
+                    "jsonrpc": "2.0",
+                    "id": Value::Null,
+                    "error": {"code": -32600, "message": "MCP request exceeds 64 MiB input limit"}
+                });
+                writeln!(stdout, "{}", serde_json::to_string(&err)?)?;
+                stdout.flush()?;
+                continue;
+            }
+            Ok(None) => break,
             Err(e) if e.kind() == io::ErrorKind::BrokenPipe => break,
             Err(e) => return Err(e.into()),
         };
-        let trimmed = line.trim();
+        let trimmed = match std::str::from_utf8(&line) {
+            Ok(text) => text.trim(),
+            Err(_) => {
+                let err = json!({
+                    "jsonrpc": "2.0", "id": Value::Null,
+                    "error": {"code": -32700, "message": "Invalid UTF-8 JSON request"}
+                });
+                writeln!(stdout, "{}", serde_json::to_string(&err)?)?;
+                stdout.flush()?;
+                continue;
+            }
+        };
         if trimmed.is_empty() {
             continue;
         }
@@ -1702,6 +1770,31 @@ pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_mcp_line_is_drained_without_losing_following_request() {
+        let valid = br#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+        let mut input = vec![b'x'; 100];
+        input.push(b'\n');
+        input.extend_from_slice(valid);
+        input.push(b'\n');
+        let mut reader = io::BufReader::with_capacity(7, io::Cursor::new(input));
+        assert!(matches!(
+            read_bounded_line(&mut reader, 64).unwrap(),
+            Some(BoundedLine::Oversize)
+        ));
+        match read_bounded_line(&mut reader, 64).unwrap() {
+            Some(BoundedLine::Line(bytes)) => assert_eq!(bytes, valid),
+            _ => panic!("Next JSON-RPC request must remain intact"),
+        }
+        assert!(read_bounded_line(&mut reader, 64).unwrap().is_none());
+
+        let mut eof = io::Cursor::new(vec![b'x'; 100]);
+        assert!(matches!(
+            read_bounded_line(&mut eof, 64).unwrap(),
+            Some(BoundedLine::Oversize)
+        ));
+    }
 
     #[test]
     fn meta_tool_refuses_recursive_calls_without_crashing_server() {

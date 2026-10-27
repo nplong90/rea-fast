@@ -30,3 +30,14 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: Build MCP executable for black-box protocol checks
+        run: cargo build --locked
+      - name: MCP malformed-input recovery smoke
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/security/mcp-stdio.mjs --rust-bin "target/debug/rea-fast${extension}"
+      - name: MCP oversize streaming and recovery (Linux)
+        if: runner.os == 'Linux'
+        run: node tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize
