@@ -58,11 +58,28 @@ pub struct WasmInterface {
     pub exports: Vec<String>,
 }
 
+const MAX_NATIVE_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
+fn read_bounded_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_NATIVE_ARTIFACT_BYTES {
+        return Err("Native artifact exceeds 256 MiB input limit".into());
+    }
+    // A second bound protects against files growing while they are read.
+    let mut bytes = Vec::new();
+    file.take(MAX_NATIVE_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_NATIVE_ARTIFACT_BYTES {
+        return Err("Native artifact grew beyond 256 MiB input limit".into());
+    }
+    Ok(bytes)
+}
+
 pub struct NativeInspector;
 
 impl NativeInspector {
     pub fn inspect_layout(path: &Path) -> Result<BinaryLayout, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let obj_file = object::File::parse(&*bytes)?;
 
@@ -117,7 +134,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_go(path: &Path) -> Result<GoBuildInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         // Scan for Go buildinf signature: \xff Go buildinf:
         let magic = b"\xff Go buildinf:";
         let mut go_version = None;
@@ -155,7 +172,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_rust(path: &Path) -> Result<RustBinaryInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let mut rustc_commit = None;
 
         // Search for /rustc/<40-hex>/
@@ -440,7 +457,7 @@ impl NativeInspector {
 
     pub fn list_symbols(path: &Path, limit: usize) -> Result<Vec<String>, Box<dyn Error>> {
         let limit = if limit == 0 { 200 } else { limit };
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let obj = object::File::parse(&*bytes)?;
         let mut symbols = Vec::new();
         for sym in obj.symbols() {
@@ -457,7 +474,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_native_exports(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let obj = object::File::parse(&*bytes)?;
         let mut exports = Vec::new();
         if let Ok(exp_iter) = obj.exports() {
@@ -485,7 +502,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_macho(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let layout = Self::inspect_layout(path)?;
         let is_macho = layout.format.to_lowercase().contains("macho");
@@ -507,7 +524,7 @@ impl NativeInspector {
     }
 
     pub fn list_architectures(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() >= 4 {
             let magic = &bytes[..4];
             if magic == [0xca, 0xfe, 0xba, 0xbe] || magic == [0xbe, 0xba, 0xfe, 0xca] {
@@ -581,7 +598,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_il2cpp_metadata(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() < 16 {
             return Err("File too small for IL2CPP metadata".into());
         }
@@ -636,7 +653,7 @@ impl NativeInspector {
             }));
         }
 
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let path_str = path.to_string_lossy().to_string();
         let ext = path
@@ -785,7 +802,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_model_artifact(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let path_str = path.to_string_lossy().to_string();
 
@@ -923,7 +940,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_python_pyc(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() < 16 {
             return Err("File too small for Python pyc".into());
         }
@@ -1006,6 +1023,20 @@ fn read_leb128(bytes: &[u8]) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn large_native_files_are_rejected_before_reading_into_memory() {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("rea_native_{}_{}.bin", std::process::id(), id));
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_NATIVE_ARTIFACT_BYTES + 1).unwrap();
+        assert!(read_bounded_artifact(&path).is_err());
+        assert!(NativeInspector::inspect_layout(&path).is_err());
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn test_wasm_parsing() {

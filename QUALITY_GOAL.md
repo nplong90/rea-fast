@@ -326,3 +326,14 @@ based on tool counts or synthetic stub responses.
   same bytes with Node SHA-256, and asserts parsed nonempty sections and
   architecture. This is a **native route readiness** check for real ELF/PE
   binaries, not a full native-binary Evidence graph upstream comparison.
+
+### 2026-10-27 — common native-binary allocation bound
+
+- Eleven native artifact entrypoints formerly used unbounded `fs::read`.
+  They now use one shared 256 MiB maximum checked against file metadata
+  and rechecked with `Read::take` while the file is read, preventing growth
+  races from expanding allocations indefinitely.
+- Added a sparse oversized-file regression asserting both the shared reader
+  and real binary-layout inspector refuse over-limit inputs.
+- This is a deliberate input limit, not full parser fuzz coverage or
+  equivalence for very large binaries; P4 remains open.
