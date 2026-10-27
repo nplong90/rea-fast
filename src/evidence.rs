@@ -822,10 +822,7 @@ mod tests {
 
     #[test]
     fn recording_an_existing_unknown_preserves_resolution_revision() {
-        let question = format!(
-            "Repeat unknown at {:?}",
-            std::time::SystemTime::now()
-        );
+        let question = format!("Repeat unknown at {:?}", std::time::SystemTime::now());
         let first = record_unknown(&json!({"question": question, "domain": "quality"}));
         let id = first["unknown_id"].as_str().unwrap();
         let updated = update_unknown(&json!({
@@ -859,9 +856,13 @@ mod tests {
         let second = record_unknown(&json!({"question": "re-a", "domain": "bc"}));
         assert_eq!(second["status"], "error");
         let stored = list_unknowns(&json!({"domain": "c"}));
-        assert!(stored["unknowns"].as_array().unwrap().iter().any(|entry| {
-            entry["unknown_id"] == first["unknown_id"]
-        }));
+        assert!(
+            stored["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| { entry["unknown_id"] == first["unknown_id"] })
+        );
     }
 
     #[test]
