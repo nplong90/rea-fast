@@ -174,7 +174,10 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
     }
 
     let digest = digest_value(&parsed);
-    if args.get("expected_sha256").is_some_and(|value| !value.is_string()) {
+    if args
+        .get("expected_sha256")
+        .is_some_and(|value| !value.is_string())
+    {
         return json!({"status": "error", "message": "expected_sha256 must be a string"});
     }
     let expected = args.get("expected_sha256").and_then(Value::as_str);
@@ -214,7 +217,13 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
         }
     }
 
-    for section in ["scenarios", "captures", "artifacts", "providers", "environments"] {
+    for section in [
+        "scenarios",
+        "captures",
+        "artifacts",
+        "providers",
+        "environments",
+    ] {
         if parsed.get(section).is_some_and(|value| !value.is_array()) {
             return json!({"status": "error", "message": format!("Invalid {section} array")});
         }
@@ -222,12 +231,20 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
 
     let mut store = get_store().write().unwrap();
     for (id, record) in &imported_records {
-        if store.records.get(id).is_some_and(|existing| existing != record) {
+        if store
+            .records
+            .get(id)
+            .is_some_and(|existing| existing != record)
+        {
             return json!({"status": "error", "message": format!("Conflicting evidence ID: {id}")});
         }
     }
     for (id, unknown) in &imported_unknowns {
-        if store.unknowns.get(id).is_some_and(|existing| existing != unknown) {
+        if store
+            .unknowns
+            .get(id)
+            .is_some_and(|existing| existing != unknown)
+        {
             return json!({"status": "error", "message": format!("Conflicting unknown ID: {id}")});
         }
     }
