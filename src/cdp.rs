@@ -5,6 +5,41 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 
+const MAX_CDP_HTTP_BODY_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CDP_WS_FRAME_BYTES: u64 = 16 * 1024 * 1024;
+
+fn checked_ws_payload_len(length: u64) -> Result<usize, String> {
+    if length > MAX_CDP_WS_FRAME_BYTES {
+        return Err("CDP WebSocket frame exceeds 16 MiB limit".to_string());
+    }
+    usize::try_from(length).map_err(|_| "WebSocket frame length overflows usize".to_string())
+}
+
+fn parse_cdp_content_length(headers: &str) -> Result<usize, String> {
+    let mut length = None;
+    for line in headers.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("content-length") {
+            if length.is_some() {
+                return Err("Duplicate Content-Length in CDP response".to_string());
+            }
+            let number: u64 = value.trim().parse()
+                .map_err(|_| "Invalid Content-Length in CDP response".to_string())?;
+            length = Some(checked_http_length(number)?);
+        }
+    }
+    length.ok_or_else(|| "Missing Content-Length in CDP response".to_string())
+}
+
+fn checked_http_length(length: u64) -> Result<usize, String> {
+    if length > MAX_CDP_HTTP_BODY_BYTES as u64 {
+        return Err("CDP HTTP response exceeds 2 MiB limit".to_string());
+    }
+    usize::try_from(length).map_err(|_| "CDP Content-Length overflows usize".to_string())
+}
+
 pub fn fetch_cdp_targets(endpoint: &str) -> Result<Vec<Value>, String> {
     let cleaned = endpoint
         .trim_start_matches("http://")
@@ -44,15 +79,7 @@ pub fn fetch_cdp_targets(endpoint: &str) -> Result<Vec<Value>, String> {
     }
 
     let header_str = String::from_utf8_lossy(&header_bytes);
-    let mut content_length = 0usize;
-    for line in header_str.lines() {
-        if line.to_ascii_lowercase().starts_with("content-length:")
-            && let Some(val) = line.split(':').nth(1)
-        {
-            content_length = val.trim().parse().unwrap_or(0);
-        }
-    }
-
+    let content_length = parse_cdp_content_length(&header_str)?;
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         stream
@@ -190,6 +217,7 @@ impl CdpSession {
     pub fn send_message(&mut self, text: &str) -> Result<(), String> {
         let payload = text.as_bytes();
         let len = payload.len();
+        checked_ws_payload_len(len as u64)?;
         let mut header = Vec::with_capacity(14);
         header.push(0x81); // FIN = 1, Opcode = 1 (Text)
 
@@ -244,10 +272,12 @@ impl CdpSession {
                 self.stream
                     .read_exact(&mut buf)
                     .map_err(|e| format!("WS len64 read error: {e}"))?;
-                u64::from_be_bytes(buf) as usize
+                checked_ws_payload_len(u64::from_be_bytes(buf))?
             }
             n => n,
         };
+
+        checked_ws_payload_len(payload_len as u64)?;
 
         let mask_key = if masked {
             let mut key = [0u8; 4];
@@ -298,7 +328,10 @@ impl CdpSession {
                 if let Some(err) = val.get("error") {
                     return Err(format!("CDP error: {}", err));
                 }
-                return Ok(val.get("result").cloned().unwrap_or(json!({})));
+                return val
+                    .get("result")
+                    .cloned()
+                    .ok_or_else(|| "CDP response lacks result payload".to_string());
             }
         }
         Err(format!("CDP call '{method}' timed out waiting for id {id}"))
@@ -427,38 +460,48 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
 
     match session.call("Page.captureScreenshot", params) {
         Ok(res) => {
-            let b64 = res.get("data").and_then(|v| v.as_str()).unwrap_or("");
-            let byte_count = (b64.len() * 3) / 4;
-
+            let Some(b64) = res.get("data").and_then(Value::as_str) else {
+                return json!({"status": "error", "message": "CDP screenshot response has no data"});
+            };
+            let raw_bytes = match decode_base64(b64) {
+                Ok(bytes) if !bytes.is_empty() => bytes,
+                Ok(_) => {
+                    return json!({"status": "error", "message": "CDP screenshot is empty"});
+                }
+                Err(error) => {
+                    return json!({"status": "error", "message": format!("Invalid screenshot base64: {error}")});
+                }
+            };
             let mut result = json!({
                 "status": "complete",
                 "target_id": target_info.get("id"),
                 "target_title": target_info.get("title"),
                 "target_url": target_info.get("url"),
                 "media_type": format!("image/{format}"),
-                "bytes": byte_count,
+                "bytes": raw_bytes.len(),
             });
 
             if let Some(out) = output_path {
-                match decode_base64(b64) {
-                    Ok(raw_bytes) => match fs::write(out, &raw_bytes) {
-                        Ok(_) => {
-                            result["saved_path"] = json!(out);
-                        }
-                        Err(e) => {
-                            result["save_error"] =
-                                json!(format!("Failed to write file {out}: {e}"));
-                        }
-                    },
-                    Err(e) => {
-                        result["save_error"] = json!(format!("Base64 decode failed: {e}"));
-                    }
+                let saved = (|| -> std::io::Result<()> {
+                    use std::io::Write;
+                    let mut file = fs::File::options()
+                        .write(true)
+                        .create_new(true)
+                        .open(out)?;
+                    file.write_all(&raw_bytes)?;
+                    file.sync_all()
+                })();
+                if let Err(error) = saved {
+                    return json!({
+                        "status": "error",
+                        "message": format!("Screenshot was not safely saved to {out}: {error}")
+                    });
                 }
+                result["saved_path"] = json!(out);
             } else {
                 result["data_base64_preview"] =
                     json!(if b64.len() > 120 { &b64[..120] } else { b64 });
             }
-
             result
         }
         Err(e) => json!({ "status": "error", "message": e }),
@@ -537,16 +580,24 @@ pub fn inspect_web_page(args: &Value) -> Value {
         scripts: Array.from(document.scripts || []).slice(0, 20).map(s => s.src || '<inline>')
     })";
 
-    let page_meta = session
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": eval_code,
-                "returnByValue": true
-            }),
-        )
-        .ok()
-        .and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
+    let page_meta = match session.call(
+        "Runtime.evaluate",
+        json!({
+            "expression": eval_code,
+            "returnByValue": true
+        }),
+    ) {
+        Ok(response) => match response.get("result").and_then(|value| value.get("value")) {
+            Some(metadata) => metadata.clone(),
+            None => {
+                return json!({
+                    "status": "error",
+                    "message": "CDP page inspection returned no observed page metadata"
+                });
+            }
+        },
+        Err(error) => return json!({"status": "error", "message": error}),
+    };
 
     json!({
         "status": "complete",
@@ -554,7 +605,7 @@ pub fn inspect_web_page(args: &Value) -> Value {
         "target_id": target_info.get("id"),
         "target_title": target_info.get("title"),
         "target_url": target_info.get("url"),
-        "page_metadata": page_meta.unwrap_or(json!({})),
+        "page_metadata": page_meta,
         "is_electron": target_info.get("url").and_then(|u| u.as_str()).map(|s| s.starts_with("file://")).unwrap_or(false)
     })
 }
@@ -615,27 +666,47 @@ pub fn export_web_scripts(args: &Value) -> Value {
 
     // Dump scripts via document.scripts evaluation
     let eval_code = "Array.from(document.scripts).map(s => ({ src: s.src, content: s.innerHTML }))";
-    let scripts_data = session
-        .call(
-            "Runtime.evaluate",
-            json!({
-                "expression": eval_code,
-                "returnByValue": true
-            }),
-        )
-        .ok()
-        .and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
+    let scripts_data = match session.call(
+        "Runtime.evaluate",
+        json!({
+            "expression": eval_code,
+            "returnByValue": true
+        }),
+    ) {
+        Ok(response) => match response.get("result").and_then(|value| value.get("value")) {
+            Some(Value::Array(scripts)) => scripts.clone(),
+            _ => {
+                return json!({
+                    "status": "error",
+                    "message": "CDP did not provide a verified scripts array"
+                });
+            }
+        },
+        Err(error) => return json!({"status": "error", "message": error}),
+    };
 
-    let _ = fs::create_dir_all(out_dir);
+    if let Err(error) = fs::create_dir_all(out_dir) {
+        return json!({"status": "error", "message": format!("Cannot create output directory: {error}")});
+    }
+
     let mut exported = Vec::new();
 
-    if let Some(Value::Array(scripts)) = scripts_data {
-        for (i, item) in scripts.iter().enumerate() {
+    {
+        for (i, item) in scripts_data.iter().enumerate() {
             let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("");
             if !content.is_empty() {
                 let file_path = Path::new(out_dir).join(format!("inline_script_{i}.js"));
-                if fs::write(&file_path, content).is_ok() {
-                    exported.push(file_path.to_string_lossy().to_string());
+                match fs::OpenOptions::new().write(true).create_new(true).open(&file_path) {
+                    Ok(mut file) => {
+                        use std::io::Write;
+                        if let Err(error) = file.write_all(content.as_bytes()) {
+                            return json!({"status": "error", "message": format!("Cannot write script: {error}")});
+                        }
+                        exported.push(file_path.to_string_lossy().to_string());
+                    }
+                    Err(error) => {
+                        return json!({"status": "error", "message": format!("Cannot safely create script file: {error}")});
+                    }
                 }
             }
         }
@@ -672,6 +743,22 @@ pub fn analyze_web_bundle(_args: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cdp_content_lengths_are_bounded_before_allocation() {
+        assert_eq!(parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 11\r\n").unwrap(), 11);
+        assert!(parse_cdp_content_length("HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n").is_err());
+        assert!(parse_cdp_content_length("Content-Length: 3\r\nContent-Length: 3").is_err());
+        assert!(parse_cdp_content_length("Content-Length: nan").is_err());
+        assert!(parse_cdp_content_length("HTTP/1.1 200 OK").is_err());
+    }
+
+    #[test]
+    fn cdp_websocket_frame_lengths_are_bounded_before_allocation() {
+        assert_eq!(checked_ws_payload_len(123).unwrap(), 123);
+        assert!(checked_ws_payload_len(MAX_CDP_WS_FRAME_BYTES + 1).is_err());
+        assert!(checked_ws_payload_len(u64::MAX).is_err());
+    }
 
     #[test]
     fn unavailable_cdp_analyses_must_not_fabricate_evidence() {

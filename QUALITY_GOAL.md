@@ -294,3 +294,18 @@ based on tool counts or synthetic stub responses.
   resource metrics cannot be obtained; it is not a mocked benchmark.
 - The normalized ESM subset and direct-command peak RSS remain narrower
   than full Evidence equivalence and process-family memory acceptance.
+
+### 2026-10-27 — CDP payload bounds and verified outcome semantics
+
+- Reject missing, invalid, duplicate or >2 MiB HTTP Content-Length values
+  before allocating target-list buffers. Reject WebSocket frames and outbound
+  payloads over 16 MiB (and checked usize conversions) before allocation.
+- Only accept CDP result envelopes containing a `result`; do not fabricate
+  an empty result for a matching ID with no payload.
+- CDP page inspection and script export now return explicit `error` if the
+  actual evaluation fails or no verified result is observed. Script/screenshot
+  saves use exclusive creation and no longer claim `complete` on write errors.
+  Screenshot base64 is decoded and validated even without output path.
+- Added bound-validation unit tests. Real browser CDP/WebSocket integration,
+  random RFC 6455 masking, handshake authenticity and full content-type
+  verification are **not yet validated** and remain open P3/P4 items.
