@@ -38,6 +38,22 @@ jobs:
           extension=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
           node tests/security/mcp-stdio.mjs --rust-bin "target/debug/rea-fast${extension}"
+      - name: Full 245-tool MCP acceptance evidence (native fixtures)
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/acceptance/mcp-matrix.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/mcp-matrix-${{ runner.os }}.json"
+      - name: Upload 245-tool acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-${{ runner.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: acceptance-artifacts/
+          retention-days: 14
+          if-no-files-found: warn
       - name: MCP oversize streaming and recovery (Linux)
         if: runner.os == 'Linux'
         run: node tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize
