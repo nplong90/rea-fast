@@ -169,8 +169,56 @@ try {
   await call('rea_execute_tool', {
     tool_name: 'compare_artifacts', arguments: { left: { x: 7 }, right: { x: 7 } },
   }, (v) => { assert.equal(v.identical, true); }); record('rea_execute_tool');
+  // Expand offline route evidence across WASM, native object metadata,
+  // semantic application graph diffing and platform inventory projections.
+  await call('inspect_wasm_artifact', { path: wasm }, (v) => {
+    assert.equal(v.is_wasm, true);
+    assert.equal(v.version, 1);
+  }); record('inspect_wasm_artifact');
+  await call('inspect_rust_binary', { path: binary }, (v) => {
+    assert.equal(typeof v.has_rust_auditable, 'boolean');
+  }); record('inspect_rust_binary');
+  await call('list_architectures', { path: binary }, (v) => {
+    assert.equal(v.architecture_count, 1);
+    assert.equal(v.architectures.length, 1);
+  }); record('list_architectures');
+  await call('inspect_native_exports', { path: binary }, (v) => {
+    assert.ok(Array.isArray(v.exports));
+    assert.equal(v.total_exports, v.exports.length);
+  }); record('inspect_native_exports');
+  await call('project_apple_application_graph', {
+    inventory_evidence: [{ path: '/Applications/Example.app' }, { path: '/Applications/Example.app/Info.plist' }],
+  }, (v) => {
+    assert.equal(v.status, 'complete');
+    assert.equal(v.bundles_count, 2);
+    assert.equal(v.plists_count, 1);
+  }); record('project_apple_application_graph');
+  await call('project_harmony_application_graph', {
+    inventory_evidence: [{ path: '/entry/module.json' }, { path: '/entry/ets/modules.abc' }],
+  }, (v) => {
+    assert.equal(v.platform, 'harmonyos');
+    assert.equal(v.packaging_model, 'stage');
+    assert.equal(v.modules_count, 1);
+    assert.equal(v.ark_bytecode_files.length, 1);
+  }); record('project_harmony_application_graph');
+  const leftGraph = { modules: [{ path: 'a.js', bytes: 1, lines: 1, exports: ['a'] }], edges: [] };
+  const rightGraph = { modules: [{ path: 'a.js', bytes: 2, lines: 2, exports: ['a'] }], edges: [] };
+  await call('diff_applications', { left: leftGraph, right: rightGraph }, (v) => {
+    assert.equal(v.changed_modules.length, 1);
+  }); record('diff_applications');
+  await call('compare_source_to_bundle', { reference: leftGraph, application: rightGraph }, (v) => {
+    assert.equal(v.changed_modules.length, 1);
+  }); record('compare_source_to_bundle');
+  await call('list_procedures', { path: binary, limit: 20 }, (v) => {
+    assert.ok(Array.isArray(v.symbols));
+    assert.equal(v.total_symbols, v.symbols.length);
+  }); record('list_procedures');
+  await call('list_names', { path: binary, limit: 20 }, (v) => {
+    assert.ok(Array.isArray(v.symbols));
+    assert.equal(v.total_symbols, v.symbols.length);
+  }); record('list_names');
   assert.equal(rows.length, 245);
-  assert.equal(verified.length, 20, '20 fixture executions expected');
+  assert.equal(verified.length, 30, '30 fixture executions expected');
 } catch (e) {
   failure = String(e.stack ?? e);
   process.exitCode = 1;
