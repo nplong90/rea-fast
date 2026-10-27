@@ -4,8 +4,7 @@ use std::{
     collections::BTreeMap,
     env,
     error::Error,
-    io::{Read, Write},
-    net::TcpStream,
+    io::Read,
     path::PathBuf,
     process::{Command, Stdio},
     thread,
@@ -103,25 +102,6 @@ impl DynamicBridge {
             })
             .collect();
         Ok(filtered)
-    }
-
-    fn parse_host_port(endpoint: &str) -> Result<(String, u16), Box<dyn Error>> {
-        let clean = endpoint
-            .trim_start_matches("http://")
-            .trim_start_matches("https://")
-            .trim_end_matches('/');
-        let parts: Vec<&str> = clean.split(':').collect();
-        let host = if parts.is_empty() || parts[0].is_empty() {
-            "127.0.0.1".to_string()
-        } else {
-            parts[0].to_string()
-        };
-        let port = if parts.len() > 1 {
-            parts[1].parse::<u16>()?
-        } else {
-            9222
-        };
-        Ok((host, port))
     }
 
     // ==========================================
