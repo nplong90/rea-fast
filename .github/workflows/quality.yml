@@ -138,3 +138,22 @@ jobs:
           google-chrome --version
       - name: Run real headless Chrome integration
         run: node tests/cdp/real-chrome.mjs --rust-bin "$GITHUB_WORKSPACE/target/debug/rea-fast"
+
+  debugger-gdb:
+    name: Real GDB MI provider via MCP (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install real GDB
+        run: |
+          if ! command -v gdb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
+          gdb --version
+      - name: Build MCP executable
+        run: cargo build --locked
+      - name: Exercise GDB lifecycle through real MCP process
+        run: node tests/debugger/real-gdb.mjs --rust-bin "$GITHUB_WORKSPACE/target/debug/rea-fast"
