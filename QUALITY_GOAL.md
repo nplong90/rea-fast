@@ -87,3 +87,11 @@ based on tool counts or synthetic stub responses.
   device, browser or executable. P2 remains in progress until fixture-backed
   verification of the classified routes is complete.
 
+### 2026-10-27 — malformed application graph inputs
+
+- `compare_application_versions` and `compare_javascript_export_shapes`
+  now reject malformed node arrays, missing/blank module identities, and
+  duplicate module paths instead of silently dropping those records and
+  potentially returning a misleading empty diff.
+- Added negative-input regression coverage for both comparison entry points.
+

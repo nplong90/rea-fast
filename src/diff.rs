@@ -58,7 +58,7 @@ pub struct ApplicationDiffer;
 
 impl ApplicationDiffer {
     fn extract_graph_payload(val: &Value) -> Option<&Value> {
-        if val.get("nodes").is_some() || val.get("modules").is_some() {
+        if val.get("nodes").or_else(|| val.get("modules")).is_some() {
             Some(val)
         } else if let Some(norm) = val.get("normalized_result") {
             Self::extract_graph_payload(norm)
@@ -67,6 +67,27 @@ impl ApplicationDiffer {
         } else {
             None
         }
+    }
+
+    fn validated_nodes<'a>(graph: &'a Value, side: &str) -> Result<&'a [Value], String> {
+        let nodes = graph
+            .get("nodes")
+            .or_else(|| graph.get("modules"))
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("{side} graph nodes/modules must be an array"))?;
+        let mut paths = HashSet::new();
+        for (index, node) in nodes.iter().enumerate() {
+            let path = node
+                .pointer("/identity/path")
+                .or_else(|| node.get("path"))
+                .and_then(Value::as_str)
+                .filter(|p| !p.trim().is_empty())
+                .ok_or_else(|| format!("{side} node {index} lacks a non-empty path"))?;
+            if !paths.insert(path) {
+                return Err(format!("{side} graph has duplicate module path: {path}"));
+            }
+        }
+        Ok(nodes)
     }
 
     pub fn compare_applications(
@@ -78,22 +99,12 @@ impl ApplicationDiffer {
         let right_graph = Self::extract_graph_payload(right_val)
             .ok_or_else(|| "Right input contains no valid application graph payload".to_string())?;
 
-        let left_nodes = left_graph
-            .get("nodes")
-            .or_else(|| left_graph.get("modules"))
-            .and_then(|n| n.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let right_nodes = right_graph
-            .get("nodes")
-            .or_else(|| right_graph.get("modules"))
-            .and_then(|n| n.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let left_nodes = Self::validated_nodes(left_graph, "Left")?;
+        let right_nodes = Self::validated_nodes(right_graph, "Right")?;
 
         let mut left_by_path: HashMap<String, &Value> = HashMap::new();
         let mut left_by_sha: HashMap<String, Vec<String>> = HashMap::new();
-        for node in &left_nodes {
+        for node in left_nodes {
             if let Some(path) = node
                 .pointer("/identity/path")
                 .or_else(|| node.get("path"))
@@ -119,7 +130,7 @@ impl ApplicationDiffer {
         }
 
         let mut right_by_path: HashMap<String, &Value> = HashMap::new();
-        for node in &right_nodes {
+        for node in right_nodes {
             if let Some(path) = node
                 .pointer("/identity/path")
                 .or_else(|| node.get("path"))
@@ -382,6 +393,8 @@ impl ApplicationDiffer {
             .ok_or_else(|| "Left input contains no valid application graph payload".to_string())?;
         let right_graph = Self::extract_graph_payload(right_val)
             .ok_or_else(|| "Right input contains no valid application graph payload".to_string())?;
+        Self::validated_nodes(left_graph, "Left")?;
+        Self::validated_nodes(right_graph, "Right")?;
 
         let find_export = |graph: &Value, mod_path: &str, exp_name: &str| -> Option<Value> {
             let nodes = graph
@@ -586,6 +599,27 @@ impl ApplicationDiffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_graphs_never_silently_compare_as_empty() {
+        let empty = json!({"nodes": [], "edges": []});
+        for invalid in [
+            json!({"nodes": null}),
+            json!({"nodes": "not an array"}),
+            json!({"nodes": [{"node_id": "missing_path"}]}),
+            json!({"nodes": [{"path": " "}]}),
+            json!({"nodes": [{"path": "a.js"}, {"path": "a.js"}]}),
+        ] {
+            assert!(ApplicationDiffer::compare_applications(&invalid, &empty).is_err());
+            assert!(ApplicationDiffer::compare_applications(&empty, &invalid).is_err());
+            assert!(
+                ApplicationDiffer::compare_export_shapes(
+                    &invalid, "a.js", "f", &empty, "a.js", "f"
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn diffs_identical_applications_as_unchanged() {
