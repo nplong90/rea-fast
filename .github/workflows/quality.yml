@@ -41,3 +41,14 @@ jobs:
       - name: MCP oversize streaming and recovery (Linux)
         if: runner.os == 'Linux'
         run: node tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize
+      - name: Build release candidate
+        run: cargo build --locked --release
+      - name: Validate and stage release candidate
+        run: node tests/release/stage.mjs
+      - name: Upload commit-pinned release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: dist-ci/
+          retention-days: 7
+          if-no-files-found: error

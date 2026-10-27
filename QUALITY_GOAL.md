@@ -218,3 +218,11 @@ based on tool counts or synthetic stub responses.
   Rust CI unit suite; accepted archives are also subjected to bounded member
   reads. The test detects crashes and panics, but is not a coverage-guided
   fuzz campaign and cannot certify all filesystem races.
+
+### 2026-10-27 — candidate artifacts, not a parity release
+
+- CI builds a `--release` binary on Ubuntu and Windows, smoke-tests
+  `--version`, produces a SHA-256/size/commit manifest, and attaches the
+  executable plus manifest as a short-lived Actions artifact.
+- The artifact is explicitly marked `candidate_only`; release parity,
+  bit-for-bit reproducibility, signing and performance gates are not satisfied.
