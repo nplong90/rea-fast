@@ -789,6 +789,44 @@ mod tests {
     }
 
     #[test]
+    fn rejects_oversized_cdp_http_body_from_a_real_socket() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            std::io::Write::write_all(
+                &mut peer,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 999999999\r\n\r\n",
+            )
+            .unwrap();
+        });
+        let result = fetch_cdp_targets(&format!("http://{addr}"));
+        assert!(result.unwrap_err().contains("2 MiB limit"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn rejects_huge_websocket_frame_header_from_a_real_socket() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            let mut request = [0u8; 2048];
+            let _ = std::io::Read::read(&mut peer, &mut request).unwrap();
+            std::io::Write::write_all(
+                &mut peer,
+                b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\n",
+            )
+            .unwrap();
+            std::io::Write::write_all(&mut peer, &[0x81, 0x7f]).unwrap();
+            std::io::Write::write_all(&mut peer, &u64::MAX.to_be_bytes()).unwrap();
+        });
+        let mut session = CdpSession::connect(&format!("ws://{addr}/devtools/page/test")).unwrap();
+        assert!(session.read_message().unwrap_err().contains("16 MiB limit"));
+        server.join().unwrap();
+    }
+
+    #[test]
     fn test_cdp_list_offline() {
         let res = list_browser_targets(&json!({ "cdp_endpoint": "http://127.0.0.1:65432" }));
         assert_eq!(res.get("status").unwrap().as_str(), Some("unavailable"));

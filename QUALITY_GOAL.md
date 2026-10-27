@@ -309,3 +309,12 @@ based on tool counts or synthetic stub responses.
 - Added bound-validation unit tests. Real browser CDP/WebSocket integration,
   random RFC 6455 masking, handshake authenticity and full content-type
   verification are **not yet validated** and remain open P3/P4 items.
+
+### 2026-10-27 — black-box CDP resource bound socket regressions
+
+- The resource-limit tests now include two actual loopback sockets:
+  an oversized HTTP Content-Length response and a huge WebSocket length
+  frame with no payload. Both must be refused before any bulk allocation.
+- This exercises the protocol parser over real TCP transport, not a live
+  browser/Chromium/CDP provider. WebSocket handshake cryptographic
+  verification remains an explicitly unclosed P4 gate.
