@@ -23,9 +23,8 @@ const MAX_ASAR_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 fn portable_asar_component(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("");
     let windows_reserved = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5",
-        "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4",
-        "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     !name.is_empty()
         && name != "."
@@ -36,7 +35,9 @@ fn portable_asar_component(name: &str) -> bool {
         && !name.chars().any(char::is_control)
         && !name.ends_with('.')
         && !name.ends_with(' ')
-        && !windows_reserved.iter().any(|word| stem.eq_ignore_ascii_case(word))
+        && !windows_reserved
+            .iter()
+            .any(|word| stem.eq_ignore_ascii_case(word))
 }
 
 /// Reject symlinks anywhere below the selected extraction root. Lexical path
@@ -618,7 +619,11 @@ pub fn pack_asar(
             .collect::<Result<_, _>>()?;
 
         if comps.iter().any(|name| !portable_asar_component(name)) {
-            return Err(format!("ASAR source contains a non-portable path: {}", rel_path.display()).into());
+            return Err(format!(
+                "ASAR source contains a non-portable path: {}",
+                rel_path.display()
+            )
+            .into());
         }
         insert_file_node(&mut root_files, &comps, node);
 
