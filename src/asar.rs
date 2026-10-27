@@ -30,7 +30,9 @@ fn portable_asar_component(name: &str) -> bool {
     !name.is_empty()
         && name != "."
         && name != ".."
-        && !name.contains(['/', '\\', ':'])
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains(':')
         && !name.chars().any(char::is_control)
         && !name.ends_with('.')
         && !name.ends_with(' ')
@@ -946,10 +948,10 @@ mod tests {
             "lpt9.log",
             "trailing.",
             "trailing ",
-            "new\\nline",
+            "new\nline",
         ] {
             let header = serde_json::json!({
-                "files": {name: {"size": 1, "offset": "0"}}
+                "files": {(name): {"size": 1, "offset": "0"}}
             });
             fs::write(&file, make_test_asar(&header.to_string(), b"x")).unwrap();
             assert!(AsarArchive::open(&file).is_err(), "unsafe name: {name}");
