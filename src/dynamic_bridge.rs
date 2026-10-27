@@ -4,14 +4,15 @@ use std::{
     collections::BTreeMap,
     env,
     error::Error,
-    fs,
     io::{Read, Write},
     net::TcpStream,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+use std::{fs, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdpTarget {
@@ -368,20 +369,20 @@ impl DynamicBridge {
             let text = String::from_utf8_lossy(&output.stdout);
             for line in text.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[0].parse::<u32>() {
-                        let comm = parts[1].to_string();
-                        if let Some(f) = filter {
-                            if !comm.to_lowercase().contains(&f.to_lowercase()) {
-                                continue;
-                            }
-                        }
-                        results.push(LiveProcessSummary {
-                            pid,
-                            name: comm.clone(),
-                            cmdline: comm,
-                        });
+                if parts.len() >= 2
+                    && let Ok(pid) = parts[0].parse::<u32>()
+                {
+                    let comm = parts[1].to_string();
+                    if let Some(f) = filter
+                        && !comm.to_lowercase().contains(&f.to_lowercase())
+                    {
+                        continue;
                     }
+                    results.push(LiveProcessSummary {
+                        pid,
+                        name: comm.clone(),
+                        cmdline: comm,
+                    });
                 }
             }
         }

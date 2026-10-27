@@ -408,7 +408,7 @@ pub fn pack_asar(
         let bytes = fs::read(&full_path)?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
 
-        let mut node = serde_json::json!({
+        let node = serde_json::json!({
             "size": size,
             "offset": current_offset.to_string(),
             "integrity": {
@@ -417,6 +417,8 @@ pub fn pack_asar(
             }
         });
 
+        #[cfg(unix)]
+        let mut node = node;
         #[cfg(unix)]
         if meta.permissions().mode() & 0o111 != 0
             && let Some(obj) = node.as_object_mut()
