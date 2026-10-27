@@ -348,3 +348,15 @@ based on tool counts or synthetic stub responses.
 - This tests the named read/evaluate/capture routes end to end on the runner,
   not full CDP coverage, complete JS runtime provenance or Windows CDP.
   Unavailable Chrome or any output mismatch fails the job.
+
+### 2026-10-27 — unify bounded CDP discovery paths
+
+- Real Chrome CI exposed a schema mismatch in the integration test:
+  MCP `list_browser_targets` returns a target array rather than an
+  object with `status`. The harness now validates the actual schema.
+- More importantly, its `DynamicBridge::query_cdp_targets` path had a
+  second unchecked Content-Length allocation. It now uses the one bounded
+  `cdp::fetch_cdp_targets` implementation (2 MiB maximum), retaining the
+  typed `CdpTarget` external-tool result.
+- Live browser evaluation/screenshot remain pending until the full
+  Chrome integration job passes; do not infer success from this patch.

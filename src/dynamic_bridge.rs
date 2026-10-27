@@ -83,51 +83,11 @@ impl DynamicBridge {
 
     /// Query loopback Chrome/Electron CDP endpoint (e.g. "http://127.0.0.1:9222" or "127.0.0.1:9222")
     pub fn query_cdp_targets(endpoint: &str) -> Result<Vec<CdpTarget>, Box<dyn Error>> {
-        let (host, port) = Self::parse_host_port(endpoint)?;
-        let addr = format!("{}:{}", host, port);
-        let mut stream = TcpStream::connect_timeout(&addr.parse()?, Duration::from_secs(3))?;
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-
-        let request = format!(
-            "GET /json HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\nUser-Agent: rea-fast\r\n\r\n",
-            host, port
-        );
-        stream.write_all(request.as_bytes())?;
-
-        let mut header_bytes = Vec::new();
-        let mut byte = [0u8; 1];
-        while !header_bytes.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte)?;
-            header_bytes.push(byte[0]);
-            if header_bytes.len() > 16384 {
-                return Err("HTTP header too large".into());
-            }
-        }
-
-        let header_str = String::from_utf8_lossy(&header_bytes);
-        let mut content_length = 0usize;
-        for line in header_str.lines() {
-            if line.to_ascii_lowercase().starts_with("content-length:")
-                && let Some(val) = line.split(':').nth(1)
-            {
-                content_length = val.trim().parse().unwrap_or(0);
-            }
-        }
-
-        let mut body = vec![0u8; content_length];
-        if content_length > 0 {
-            stream.read_exact(&mut body)?;
-        } else {
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = stream.read(&mut chunk) {
-                if n == 0 {
-                    break;
-                }
-                body.extend_from_slice(&chunk[..n]);
-            }
-        }
-
-        let targets: Vec<CdpTarget> = serde_json::from_slice(&body)?;
+        // One bounded parser for both MCP discovery and direct CDP inspection.
+        // The old implementation trusted Content-Length and allocated without
+        // a cap; never reintroduce a second unbounded HTTP reader.
+        let values = crate::cdp::fetch_cdp_targets(endpoint)?;
+        let targets: Vec<CdpTarget> = serde_json::from_value(Value::Array(values))?;
         Ok(targets)
     }
 

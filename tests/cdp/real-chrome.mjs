@@ -81,8 +81,8 @@ try {
     return JSON.parse(response.result.content[0].text);
   }
   const targets = await callTool(1, 'list_browser_targets', { cdp_endpoint: endpoint });
-  assert.equal(targets.status, 'complete');
-  assert.ok(targets.target_count >= 1);
+  assert.ok(Array.isArray(targets), 'list_browser_targets must return the documented target array');
+  assert.ok(targets.length >= 1);
   const evaluated = await callTool(2, 'evaluate_web_script', {
     cdp_endpoint: endpoint, expression: '1 + 2',
   });
