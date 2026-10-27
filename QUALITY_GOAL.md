@@ -51,3 +51,16 @@ passing unit suite only establishes P0/P1 coverage, not total REA parity.
 Maintain this document as a status ledger; don't convert pending to complete
 based on tool counts or synthetic stub responses.
 
+## Verification log
+
+### 2026-10-27 — fail-closed managed workflows and binary plist hardening
+
+- Four unimplemented managed-analysis operations now return `unavailable`
+  instead of fabricated `pass`, `complete`, or `verified` outcomes.
+- Binary plist parsing validates object offsets, reference spans, extended
+  lengths and recursion depth before decoding untrusted data.
+- Added regression coverage for managed-analysis false positives and a
+  deterministic malformed-bplist mutation corpus.
+- These changes reduce P0/P4 risks but do **not** establish complete parser
+  fuzz coverage or managed-analysis parity with upstream.
+

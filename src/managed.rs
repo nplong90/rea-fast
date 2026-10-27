@@ -368,40 +368,60 @@ pub fn inspect_managed_native_boundaries(args: &Value) -> Value {
 
 pub fn verify_managed_native_boundaries(_args: &Value) -> Value {
     json!({
-        "status": "pass",
-        "verified": true,
-        "unresolved_declarations": []
+        "status": "unavailable",
+        "verified": null,
+        "unresolved_declarations": null,
+        "reason": "No retained boundary declarations or native targets were verified"
     })
 }
 
 pub fn compare_managed_members(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "members_matched": true,
-        "structural_differences": []
+        "status": "unavailable",
+        "members_matched": null,
+        "structural_differences": null,
+        "reason": "No member identities or method bodies were compared"
     })
 }
 
 pub fn project_managed_application_graph(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "graph_nodes": [],
-        "call_edges": [],
-        "managed_type_boundaries": []
+        "status": "unavailable",
+        "graph_nodes": null,
+        "call_edges": null,
+        "managed_type_boundaries": null,
+        "reason": "No managed reference graph has been constructed"
     })
 }
 
 pub fn import_managed_reconstruction(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "imported": true,
-        "methods_reconstructed": 0
+        "status": "unavailable",
+        "imported": false,
+        "methods_reconstructed": null,
+        "reason": "Managed reconstruction import is not implemented"
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unimplemented_managed_workflows_never_claim_verification() {
+        let args = json!({"claims": [], "left": {}, "right": {}});
+        assert_eq!(
+            verify_managed_native_boundaries(&args)["status"],
+            "unavailable"
+        );
+        assert!(verify_managed_native_boundaries(&args)["verified"].is_null());
+        assert!(compare_managed_members(&args)["members_matched"].is_null());
+        assert_eq!(
+            project_managed_application_graph(&args)["status"],
+            "unavailable"
+        );
+        assert_eq!(import_managed_reconstruction(&args)["imported"], false);
+    }
 
     #[test]
     fn test_bsjb_parsing() {
