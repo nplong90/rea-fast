@@ -119,6 +119,44 @@ try {
   assert.equal(graph.schema, 'JavaScriptApplicationGraph');
   assert.ok(graph.nodes.filter((node) => node.kind === 'source-module').length >= 2);
 
+  async function callNative(id, name, arguments_) {
+    await write(JSON.stringify({
+      jsonrpc: '2.0', id, method: 'tools/call',
+      params: { name, arguments: arguments_ },
+    }) + '\n');
+    const message = await nextResponse();
+    assert.equal(message.id, id);
+    assert.equal(message.result?.isError, false, JSON.stringify(message));
+    return JSON.parse(message.result.content[0].text);
+  }
+
+  const secretResult = await callNative(9, 'scan_secrets', {
+    source: '-----BEGIN OPENSSH PRIVATE KEY-----',
+    path: 'synthetic-fixture.txt',
+  });
+  assert.equal(secretResult.total_secrets, 1);
+  assert.equal(secretResult.secrets[0].rule, 'Private Key');
+  assert.ok(!JSON.stringify(secretResult).includes('-----BEGIN OPENSSH PRIVATE KEY-----'));
+
+  const comparable = await callNative(10, 'compare_artifacts', {
+    left: { z: 1, a: [2, 3] }, right: { a: [2, 3], z: 1 },
+  });
+  assert.equal(comparable.status, 'complete');
+  assert.equal(comparable.identical, true);
+
+  const unknown = await callNative(11, 'record_unknown', {
+    question: 'How does the fixture preserve evidence?',
+    domain: 'mcp-smoke',
+  });
+  assert.equal(unknown.status, 'open');
+  assert.ok(unknown.unknown_id);
+
+  const updatedUnknown = await callNative(12, 'update_unknown', {
+    unknown_id: unknown.unknown_id, expected_revision: 1, status: 'resolved',
+  });
+  assert.equal(updatedUnknown.status, 'resolved');
+  assert.equal(updatedUnknown.revision, 2);
+
   if (testOversize) {
     // Stream instead of allocating a 65 MiB string in the test process.
     const block = Buffer.alloc(1024 * 1024, 0x78);
@@ -127,13 +165,16 @@ try {
     await request('{"jsonrpc":"2.0","id":3,"method":"ping"}\n', null, 3);
   }
 
-  assert.equal(observed, testOversize ? 46 : 44);
+  assert.equal(observed, testOversize ? 50 : 48);
   child.stdin.end();
   const [code] = await once(child, 'exit');
   assert.equal(code, 0, stderr);
   process.stdout.write(JSON.stringify({ status: 'pass', malformed_inputs: 35,
     oversized_stream_tested: testOversize, subsequent_ping_survived: true,
-    verified_mcp_native_routes: ['analyze_electron_source', 'analyze_javascript_application'],
+    verified_mcp_native_routes: [
+      'analyze_electron_source', 'analyze_javascript_application',
+      'scan_secrets', 'compare_artifacts', 'record_unknown', 'update_unknown',
+    ],
     invalid_request_and_params_rejected: 4,
     unavailable_tool_reports_isError: true }) + '\n');
 } catch (error) {

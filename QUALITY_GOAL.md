@@ -272,3 +272,13 @@ based on tool counts or synthetic stub responses.
   eviction, unlimited line draining and completion-evidence semantics.
 - Live debugger process/provider verification and full timeout cleanup
   remain open.
+
+### 2026-10-27 — six native MCP routes exercised with real stdio
+
+- Expanded the Linux/Windows MCP child-process smoke to execute
+  `scan_secrets`, `compare_artifacts`, `record_unknown` and
+  `update_unknown` on synthetic fixture input, in addition to the
+  JavaScript and Electron analyzers. Assertions verify structured responses,
+  no raw secret disclosure and unknown revision transition.
+- This establishes **six native routes exercised end-to-end**, not
+  that all 63 labeled native tools have provider readiness or upstream parity.
