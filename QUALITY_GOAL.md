@@ -61,6 +61,11 @@ based on tool counts or synthetic stub responses.
   lengths and recursion depth before decoding untrusted data.
 - Added regression coverage for managed-analysis false positives and a
   deterministic malformed-bplist mutation corpus.
+- Eliminated fabricated Frida session/script lifecycle results, nine CDP
+  analysis/comparison success stubs, and a synthetic Interface Builder decode;
+  these operations explicitly report `unavailable` pending real implementations.
+- Expanded the Rust suite from the original 66 tests to 75 tests; this is
+  regression coverage, not proof of feature parity.
 - These changes reduce P0/P4 risks but do **not** establish complete parser
   fuzz coverage or managed-analysis parity with upstream.
 

@@ -563,31 +563,24 @@ pub fn inspect_electron_page(args: &Value) -> Value {
     inspect_web_page(args)
 }
 
-pub fn inspect_web_event_listeners(args: &Value) -> Value {
+fn unavailable_web_analysis(operation: &str) -> Value {
     json!({
-        "status": "complete",
-        "selector": args.get("selector").and_then(|v| v.as_str()).unwrap_or("*"),
-        "listeners": []
+        "status": "unavailable",
+        "operation": operation,
+        "reason": "This operation does not collect or compare the required CDP evidence"
     })
+}
+
+pub fn inspect_web_event_listeners(_args: &Value) -> Value {
+    unavailable_web_analysis("inspect_web_event_listeners")
 }
 
 pub fn discover_webmcp_tools(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "tools": { "total": 0, "inventory": [] }
-    })
+    unavailable_web_analysis("discover_webmcp_tools")
 }
 
-pub fn observe_web_session(args: &Value) -> Value {
-    let observation_ms = args
-        .get("observation_ms")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(1000);
-    json!({
-        "status": "complete",
-        "observation_ms": observation_ms,
-        "events_captured": 0
-    })
+pub fn observe_web_session(_args: &Value) -> Value {
+    unavailable_web_analysis("observe_web_session")
 }
 
 pub fn observe_web_execution(args: &Value) -> Value {
@@ -595,10 +588,7 @@ pub fn observe_web_execution(args: &Value) -> Value {
     if args.get("expression").is_some() {
         evaluate_web_script(args)
     } else {
-        json!({
-            "status": "complete",
-            "coverage": { "ranges": [], "counts": [] }
-        })
+        unavailable_web_analysis("observe_web_execution")
     }
 }
 
@@ -659,51 +649,50 @@ pub fn export_web_scripts(args: &Value) -> Value {
     })
 }
 
-pub fn trace_web_module_imports(args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "script_index": args.get("script_index").and_then(|v| v.as_u64()).unwrap_or(0),
-        "imports": []
-    })
+pub fn trace_web_module_imports(_args: &Value) -> Value {
+    unavailable_web_analysis("trace_web_module_imports")
 }
 
-pub fn trace_web_source_location(args: &Value) -> Value {
-    let gen_pos = args.get("generated_position");
-    json!({
-        "status": "complete",
-        "generated_position": gen_pos,
-        "original_position": gen_pos,
-        "source": "unknown"
-    })
+pub fn trace_web_source_location(_args: &Value) -> Value {
+    unavailable_web_analysis("trace_web_source_location")
 }
 
 pub fn compare_web_captures(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "differences": []
-    })
+    unavailable_web_analysis("compare_web_captures")
 }
 
 pub fn compare_web_screenshots(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "pixel_delta_ratio": 0.0,
-        "identical": true
-    })
+    unavailable_web_analysis("compare_web_screenshots")
 }
 
 pub fn analyze_web_bundle(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "routes": [],
-        "chunks": [],
-        "endpoints": []
-    })
+    unavailable_web_analysis("analyze_web_bundle")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_cdp_analyses_must_not_fabricate_evidence() {
+        let args = json!({"selector": "*", "generated_position": {"line": 4}});
+        for value in [
+            inspect_web_event_listeners(&args),
+            discover_webmcp_tools(&args),
+            observe_web_session(&args),
+            observe_web_execution(&args),
+            trace_web_module_imports(&args),
+            trace_web_source_location(&args),
+            compare_web_captures(&args),
+            compare_web_screenshots(&args),
+            analyze_web_bundle(&args),
+        ] {
+            assert_eq!(value["status"], "unavailable");
+            assert!(value.get("identical").is_none());
+            assert!(value.get("events_captured").is_none());
+            assert!(value.get("original_position").is_none());
+        }
+    }
 
     #[test]
     fn test_cdp_list_offline() {

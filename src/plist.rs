@@ -510,17 +510,21 @@ pub fn inspect_keyed_archive(args: &Value) -> Value {
 /// Decode Interface Builder archives (.nib / .storyboard)
 pub fn decode_interface_builder(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "documents_count": 1,
-        "objects_count": 0,
-        "connections_count": 0,
-        "views": []
+        "status": "unavailable",
+        "reason": "Interface Builder archive decoding is not implemented"
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn interface_builder_stub_must_not_claim_decoded_documents() {
+        let result = decode_interface_builder(&json!({"path": "test.nib"}));
+        assert_eq!(result["status"], "unavailable");
+        assert!(result.get("documents_count").is_none());
+    }
 
     fn bplist_with_object(object: &[u8]) -> Vec<u8> {
         let mut data = b"bplist00".to_vec();

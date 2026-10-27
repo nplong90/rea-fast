@@ -283,59 +283,36 @@ pub fn close_rizin_debug_session(args: &Value) -> Value {
 // Frida Persistent Session
 // ---------------------------------------------------------
 
-pub fn start_frida_session(args: &Value) -> Value {
-    let session_id = format!("frida_{}", uuid_simple());
+fn unavailable_frida_operation(operation: &str) -> Value {
     json!({
-        "status": "active",
-        "session_id": session_id,
-        "mode": args.get("mode").and_then(|v| v.as_str()).unwrap_or("attach")
+        "status": "unavailable",
+        "operation": operation,
+        "reason": "No Frida process, transport, or instrumentation session is connected"
     })
 }
 
-pub fn frida_session_status(args: &Value) -> Value {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    json!({
-        "status": "active",
-        "session_id": session_id,
-        "messages": []
-    })
+pub fn start_frida_session(_args: &Value) -> Value {
+    unavailable_frida_operation("start_frida_session")
+}
+
+pub fn frida_session_status(_args: &Value) -> Value {
+    unavailable_frida_operation("frida_session_status")
 }
 
 pub fn load_frida_script(_args: &Value) -> Value {
-    let script_id = format!("script_{}", uuid_simple());
-    json!({
-        "status": "complete",
-        "script_id": script_id,
-        "loaded": true
-    })
+    unavailable_frida_operation("load_frida_script")
 }
 
 pub fn unload_frida_script(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "unloaded": true
-    })
+    unavailable_frida_operation("unload_frida_script")
 }
 
 pub fn resume_frida_session(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "resumed": true
-    })
+    unavailable_frida_operation("resume_frida_session")
 }
 
-pub fn close_frida_session(args: &Value) -> Value {
-    let session_id = args
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    json!({
-        "status": "closed",
-        "session_id": session_id
-    })
+pub fn close_frida_session(_args: &Value) -> Value {
+    unavailable_frida_operation("close_frida_session")
 }
 
 fn uuid_simple() -> String {
@@ -352,12 +329,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_lifecycle() {
-        let res = start_frida_session(&json!({ "mode": "attach" }));
-        let id = res.get("session_id").unwrap().as_str().unwrap();
-        let stat = frida_session_status(&json!({ "session_id": id }));
-        assert_eq!(stat.get("status").unwrap().as_str(), Some("active"));
-        let closed = close_frida_session(&json!({ "session_id": id }));
-        assert_eq!(closed.get("status").unwrap().as_str(), Some("closed"));
+    fn frida_stub_operations_must_not_fabricate_sessions() {
+        let args = json!({"session_id": "fake", "mode": "attach", "script": "send('hi')"});
+        for output in [
+            start_frida_session(&args),
+            frida_session_status(&args),
+            load_frida_script(&args),
+            unload_frida_script(&args),
+            resume_frida_session(&args),
+            close_frida_session(&args),
+        ] {
+            assert_eq!(output["status"], "unavailable");
+            assert!(output.get("session_id").is_none());
+            assert!(output.get("script_id").is_none());
+            assert!(output.get("loaded").is_none());
+        }
     }
 }
