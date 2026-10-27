@@ -258,8 +258,7 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
         if let Some(items) = parsed.get(key).and_then(Value::as_array) {
             // Canonical JSON is collision-free as a set key for JSON values,
             // and avoids O(n^2) duplicate checks on untrusted bundle arrays.
-            let mut seen: HashSet<String> =
-                destination.iter().map(canonicalize_json).collect();
+            let mut seen: HashSet<String> = destination.iter().map(canonicalize_json).collect();
             for item in items {
                 if seen.insert(canonicalize_json(item)) {
                     destination.push(item.clone());
