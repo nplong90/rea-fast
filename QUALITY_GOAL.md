@@ -207,3 +207,14 @@ based on tool counts or synthetic stub responses.
   hash agreement, oversized comparison and malformed bundle shape.
 - Full chain-of-custody verification and concurrent parent-directory attack
   resistance are still pending.
+
+### 2026-10-27 — portable ASAR path validation and mutation corpus
+
+- Reject Windows device names, alternate-stream colons, separators, control
+  characters and trailing dot/space on all platforms when reading or packing
+  ASAR. This prevents producing an archive on Linux that can collide with a
+  special Windows path upon extraction.
+- Add a deterministic 512-case mutated Pickle/header/payload corpus to the
+  Rust CI unit suite; accepted archives are also subjected to bounded member
+  reads. The test detects crashes and panics, but is not a coverage-guided
+  fuzz campaign and cannot certify all filesystem races.

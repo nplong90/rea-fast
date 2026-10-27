@@ -18,6 +18,25 @@ const MAX_HEADER_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LISTING_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ASAR_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
+/// All ASAR paths should be safe to extract on both Unix and Windows,
+/// regardless of the host platform that originally packaged the archive.
+fn portable_asar_component(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("");
+    let windows_reserved = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5",
+        "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4",
+        "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':'])
+        && !name.chars().any(char::is_control)
+        && !name.ends_with('.')
+        && !name.ends_with(' ')
+        && !windows_reserved.iter().any(|word| stem.eq_ignore_ascii_case(word))
+}
+
 /// Reject symlinks anywhere below the selected extraction root. Lexical path
 /// containment alone does not prevent an existing `subdir` symlink from
 /// redirecting writes outside that root.
@@ -224,13 +243,7 @@ impl AsarArchive {
         retained_bytes: &mut usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         for (name, node) in files {
-            if name.is_empty()
-                || name == "."
-                || name == ".."
-                || name.contains('/')
-                || name.contains('\0')
-                || (cfg!(windows) && name.contains('\\'))
-            {
+            if !portable_asar_component(&name) {
                 return Err(format!("ASAR header has unsafe path component: {name}").into());
             }
 
@@ -602,6 +615,9 @@ pub fn pack_asar(
             })
             .collect::<Result<_, _>>()?;
 
+        if comps.iter().any(|name| !portable_asar_component(name)) {
+            return Err(format!("ASAR source contains a non-portable path: {}", rel_path.display()).into());
+        }
         insert_file_node(&mut root_files, &comps, node);
 
         files_to_write.push((full_path, size, hash));
@@ -917,6 +933,59 @@ mod tests {
         }
         bytes.extend_from_slice(content);
         bytes
+    }
+
+    #[test]
+    fn asar_rejects_cross_platform_reserved_path_components() {
+        let scope = isolated_test_dir();
+        let file = scope.join("malicious.asar");
+        for name in [
+            r"sub\\file.txt",
+            "C:drive.txt",
+            "CON.txt",
+            "lpt9.log",
+            "trailing.",
+            "trailing ",
+            "new\\nline",
+        ] {
+            let header = serde_json::json!({
+                "files": {name: {"size": 1, "offset": "0"}}
+            });
+            fs::write(&file, make_test_asar(&header.to_string(), b"x")).unwrap();
+            assert!(AsarArchive::open(&file).is_err(), "unsafe name: {name}");
+        }
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn deterministic_asar_header_mutations_never_panic() {
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("mutated.asar");
+        let original = make_test_asar(
+            r#"{"files":{"main.js":{"size":5,"offset":"0"},"lib":{"files":{"api.js":{"size":3,"offset":"5"}}}}}"#,
+            b"helloapi",
+        );
+        // Seeded mutation corpus: corrupt Pickle extents, JSON bytes, entry
+        // offsets and archive payload. A rejection is fine; panic is not.
+        let mut seed = 0x6a09_e667_f3bc_c909u64;
+        for case in 0..512 {
+            let mut sample = original.clone();
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let index = (seed as usize) % sample.len();
+            sample[index] ^= ((case % 251) + 1) as u8;
+            if case % 7 == 0 {
+                sample.truncate((seed as usize) % sample.len());
+            }
+            fs::write(&archive_path, &sample).unwrap();
+            if let Ok(archive) = AsarArchive::open(&archive_path) {
+                for entry in &archive.entries {
+                    let _ = archive.read_file(entry);
+                }
+            }
+        }
+        fs::remove_dir_all(scope).unwrap();
     }
 
     #[test]
