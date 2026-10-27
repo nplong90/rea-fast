@@ -169,9 +169,8 @@ fn secure_random_bytes(out: &mut [u8]) -> Result<(), String> {
         }
         let length = u32::try_from(out.len()).map_err(|_| "Random buffer too large")?;
         // BCRYPT_USE_SYSTEM_PREFERRED_RNG; nonnegative NTSTATUS means success.
-        let status = unsafe {
-            BCryptGenRandom(std::ptr::null_mut(), out.as_mut_ptr(), length, 0x2)
-        };
+        let status =
+            unsafe { BCryptGenRandom(std::ptr::null_mut(), out.as_mut_ptr(), length, 0x2) };
         if status < 0 {
             Err(format!("Windows system randomness failed: {status}"))
         } else {
@@ -186,8 +185,7 @@ fn secure_random_bytes(out: &mut [u8]) -> Result<(), String> {
 }
 
 fn encode_base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut result = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for block in bytes.chunks(3) {
         let value = (u32::from(block[0]) << 16)
@@ -219,7 +217,13 @@ fn websocket_sha1(input: &[u8]) -> [u8; 20] {
         data.push(0);
     }
     data.extend_from_slice(&bits.to_be_bytes());
-    let mut h = [0x67452301u32, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+    let mut h = [
+        0x67452301u32,
+        0xEFCDAB89,
+        0x98BADCFE,
+        0x10325476,
+        0xC3D2E1F0,
+    ];
     for chunk in data.chunks_exact(64) {
         let mut words = [0u32; 80];
         for (i, word) in words.iter_mut().take(16).enumerate() {
@@ -227,8 +231,7 @@ fn websocket_sha1(input: &[u8]) -> [u8; 20] {
             *word = u32::from_be_bytes(chunk[at..at + 4].try_into().unwrap());
         }
         for i in 16..80 {
-            words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16])
-                .rotate_left(1);
+            words[i] = (words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16]).rotate_left(1);
         }
         let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
         for (i, word) in words.iter().enumerate() {
@@ -948,7 +951,10 @@ mod tests {
         );
         assert!(validate_websocket_handshake(&headers, &accept).is_ok());
         assert!(validate_websocket_handshake(&headers, "forged").is_err());
-        assert!(validate_websocket_handshake("HTTP/1.1 101 Switching Protocols\r\n\r\n", &accept).is_err());
+        assert!(
+            validate_websocket_handshake("HTTP/1.1 101 Switching Protocols\r\n\r\n", &accept)
+                .is_err()
+        );
     }
 
     #[test]
