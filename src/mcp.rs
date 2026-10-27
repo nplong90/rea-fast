@@ -1754,7 +1754,9 @@ pub fn run_mcp_server() -> Result<(), Box<dyn Error>> {
                         .get("name")
                         .and_then(Value::as_str)
                         .is_some_and(|name| !name.is_empty())
-                    || params.get("arguments").is_some_and(|args| !args.is_object())
+                    || params
+                        .get("arguments")
+                        .is_some_and(|args| !args.is_object())
                 {
                     let err = json!({
                         "jsonrpc": "2.0",
