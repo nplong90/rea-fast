@@ -1,13 +1,7 @@
 use flate2::read::DeflateDecoder;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeMap,
-    error::Error,
-    fs,
-    io::Read,
-    path::Path,
-};
+use std::{collections::BTreeMap, error::Error, fs, io::Read, path::Path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DexSummary {
@@ -128,7 +122,8 @@ impl MobileInspector {
         let raw_data = &bytes[data_start..data_end];
         match entry.compression_method {
             0 => Ok(raw_data.to_vec()), // Stored
-            8 => { // Deflated
+            8 => {
+                // Deflated
                 let mut decoder = DeflateDecoder::new(raw_data);
                 let mut decompressed = Vec::with_capacity(entry.uncompressed_size as usize);
                 decoder.read_to_end(&mut decompressed)?;
@@ -176,21 +171,26 @@ impl MobileInspector {
         let mut activities = Vec::new();
         let mut services = Vec::new();
 
-        if let Some(entry) = manifest_entry {
-            if let Ok(manifest_bytes) = Self::extract_zip_entry(&bytes, &entry) {
-                let strings = Self::parse_axml_strings(&manifest_bytes);
-                for s in &strings {
-                    if s.contains("permission.") {
-                        permissions.push(s.clone());
-                    } else if s.ends_with("Activity") {
-                        activities.push(s.clone());
-                    } else if s.ends_with("Service") {
-                        services.push(s.clone());
-                    } else if package_name.is_none() && s.contains('.') && !s.starts_with("http") && !s.starts_with("android.") && s.len() > 3 {
-                        if s.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_') {
-                            package_name = Some(s.clone());
-                        }
-                    }
+        if let Some(entry) = manifest_entry
+            && let Ok(manifest_bytes) = Self::extract_zip_entry(&bytes, &entry)
+        {
+            let strings = Self::parse_axml_strings(&manifest_bytes);
+            for s in &strings {
+                if s.contains("permission.") {
+                    permissions.push(s.clone());
+                } else if s.ends_with("Activity") {
+                    activities.push(s.clone());
+                } else if s.ends_with("Service") {
+                    services.push(s.clone());
+                } else if package_name.is_none()
+                    && s.contains('.')
+                    && !s.starts_with("http")
+                    && !s.starts_with("android.")
+                    && s.len() > 3
+                    && s.chars()
+                        .all(|c| c.is_alphanumeric() || c == '.' || c == '_')
+                {
+                    package_name = Some(s.clone());
                 }
             }
         }
@@ -227,49 +227,71 @@ impl MobileInspector {
         let mut cur = 8;
         while cur + 8 <= bytes.len() {
             let chunk_type = u16::from_le_bytes(bytes[cur..cur + 2].try_into().unwrap_or([0, 0]));
-            let chunk_size = u32::from_le_bytes(bytes[cur + 4..cur + 8].try_into().unwrap_or([0, 0, 0, 0])) as usize;
+            let chunk_size =
+                u32::from_le_bytes(bytes[cur + 4..cur + 8].try_into().unwrap_or([0, 0, 0, 0]))
+                    as usize;
 
-            if chunk_type == 0x0001 { // RES_STRING_POOL_TYPE
+            if chunk_type == 0x0001 {
+                // RES_STRING_POOL_TYPE
                 if cur + 28 <= bytes.len() {
-                    let string_count = u32::from_le_bytes(bytes[cur + 8..cur + 12].try_into().unwrap_or([0, 0, 0, 0])) as usize;
-                    let flags = u32::from_le_bytes(bytes[cur + 16..cur + 20].try_into().unwrap_or([0, 0, 0, 0]));
-                    let strings_start = cur + u32::from_le_bytes(bytes[cur + 20..cur + 24].try_into().unwrap_or([0, 0, 0, 0])) as usize;
+                    let string_count = u32::from_le_bytes(
+                        bytes[cur + 8..cur + 12].try_into().unwrap_or([0, 0, 0, 0]),
+                    ) as usize;
+                    let flags = u32::from_le_bytes(
+                        bytes[cur + 16..cur + 20].try_into().unwrap_or([0, 0, 0, 0]),
+                    );
+                    let strings_start = cur
+                        + u32::from_le_bytes(
+                            bytes[cur + 20..cur + 24].try_into().unwrap_or([0, 0, 0, 0]),
+                        ) as usize;
                     let is_utf8 = (flags & (1 << 8)) != 0;
 
                     let offsets_start = cur + 28;
                     for i in 0..string_count {
                         let off_idx = offsets_start + i * 4;
-                        if off_idx + 4 > bytes.len() { break; }
-                        let str_offset = strings_start + u32::from_le_bytes(bytes[off_idx..off_idx + 4].try_into().unwrap_or([0, 0, 0, 0])) as usize;
+                        if off_idx + 4 > bytes.len() {
+                            break;
+                        }
+                        let str_offset = strings_start
+                            + u32::from_le_bytes(
+                                bytes[off_idx..off_idx + 4]
+                                    .try_into()
+                                    .unwrap_or([0, 0, 0, 0]),
+                            ) as usize;
 
                         if is_utf8 {
                             if str_offset + 2 <= bytes.len() {
                                 // UTF-8: skip length bytes, read null-terminated or length
                                 let len = bytes[str_offset + 1] as usize;
                                 let start = str_offset + 2;
-                                if start + len <= bytes.len() {
-                                    if let Ok(s) = std::str::from_utf8(&bytes[start..start + len]) {
-                                        if !s.is_empty() {
-                                            strings.push(s.to_string());
-                                        }
-                                    }
+                                if start + len <= bytes.len()
+                                    && let Ok(s) = std::str::from_utf8(&bytes[start..start + len])
+                                    && !s.is_empty()
+                                {
+                                    strings.push(s.to_string());
                                 }
                             }
                         } else {
                             if str_offset + 2 <= bytes.len() {
                                 // UTF-16: 2-byte length
-                                let char_len = u16::from_le_bytes(bytes[str_offset..str_offset + 2].try_into().unwrap_or([0, 0])) as usize;
+                                let char_len = u16::from_le_bytes(
+                                    bytes[str_offset..str_offset + 2]
+                                        .try_into()
+                                        .unwrap_or([0, 0]),
+                                ) as usize;
                                 let start = str_offset + 2;
                                 let byte_len = char_len * 2;
                                 if start + byte_len <= bytes.len() {
                                     let u16_chars: Vec<u16> = bytes[start..start + byte_len]
-                                        .chunks_exact(2)
+                                        .as_chunks::<2>()
+                                        .0
+                                        .iter()
                                         .map(|c| u16::from_le_bytes([c[0], c[1]]))
                                         .collect();
-                                    if let Ok(s) = String::from_utf16(&u16_chars) {
-                                        if !s.is_empty() {
-                                            strings.push(s);
-                                        }
+                                    if let Ok(s) = String::from_utf16(&u16_chars)
+                                        && !s.is_empty()
+                                    {
+                                        strings.push(s);
                                     }
                                 }
                             }
@@ -289,7 +311,7 @@ impl MobileInspector {
         if strings.is_empty() {
             let mut buf = Vec::new();
             for &b in bytes {
-                if b >= 32 && b <= 126 {
+                if (32..=126).contains(&b) {
                     buf.push(b);
                 } else {
                     if buf.len() >= 4 {
@@ -328,7 +350,10 @@ impl MobileInspector {
                         is_flutter = true;
                         has_flutter_assets = true;
                         artifacts_found.push(e.name);
-                    } else if name.contains("isolate_snapshot") || name.contains("vm_snapshot") || name.contains("kernel_blob.bin") {
+                    } else if name.contains("isolate_snapshot")
+                        || name.contains("vm_snapshot")
+                        || name.contains("kernel_blob.bin")
+                    {
                         is_flutter = true;
                         has_snapshot_data = true;
                         artifacts_found.push(e.name);
@@ -350,7 +375,10 @@ impl MobileInspector {
                     is_flutter = true;
                     has_flutter_assets = true;
                     artifacts_found.push(entry.path().to_string_lossy().to_string());
-                } else if p_str.contains("isolate_snapshot") || p_str.contains("vm_snapshot") || p_str.contains("kernel_blob.bin") {
+                } else if p_str.contains("isolate_snapshot")
+                    || p_str.contains("vm_snapshot")
+                    || p_str.contains("kernel_blob.bin")
+                {
                     is_flutter = true;
                     has_snapshot_data = true;
                     artifacts_found.push(entry.path().to_string_lossy().to_string());
@@ -386,7 +414,11 @@ impl MobileInspector {
             for e in entries {
                 if e.name.starts_with("META-INF/") {
                     let upper = e.name.to_uppercase();
-                    if upper.ends_with(".RSA") || upper.ends_with(".DSA") || upper.ends_with(".EC") || upper.ends_with(".SF") {
+                    if upper.ends_with(".RSA")
+                        || upper.ends_with(".DSA")
+                        || upper.ends_with(".EC")
+                        || upper.ends_with(".SF")
+                    {
                         v1_files.push(e.name);
                         has_v1 = true;
                     }
@@ -414,12 +446,17 @@ impl MobileInspector {
         }))
     }
 
-    pub fn project_android_application_graph(path: &Path) -> Result<serde_json::Value, Box<dyn Error>> {
+    pub fn project_android_application_graph(
+        path: &Path,
+    ) -> Result<serde_json::Value, Box<dyn Error>> {
         let info = Self::inspect_apk(path)?;
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 
-        let app_id = info.package_name.clone().unwrap_or_else(|| "android_app".to_string());
+        let app_id = info
+            .package_name
+            .clone()
+            .unwrap_or_else(|| "android_app".to_string());
         nodes.push(serde_json::json!({
             "id": app_id,
             "kind": "application",
@@ -473,11 +510,11 @@ mod tests {
         // Minimum valid empty zip archive is 22 bytes
         let empty_zip: [u8; 22] = [
             b'P', b'K', 0x05, 0x06, // signature
-            0, 0, 0, 0,             // disk numbers
-            0, 0, 0, 0,             // entries
-            0, 0, 0, 0,             // central directory size
-            0, 0, 0, 0,             // central directory offset
-            0, 0,                   // comment length
+            0, 0, 0, 0, // disk numbers
+            0, 0, 0, 0, // entries
+            0, 0, 0, 0, // central directory size
+            0, 0, 0, 0, // central directory offset
+            0, 0, // comment length
         ];
         let entries = MobileInspector::parse_zip_entries(&empty_zip).unwrap();
         assert!(entries.is_empty());

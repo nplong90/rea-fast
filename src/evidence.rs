@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::sync::{OnceLock, RwLock};
 
-/// RFC 8785 JSON Canonicalization Scheme (JCS)
+/// Deterministic JSON encoding for locally stored evidence.
+/// This is not a complete RFC 8785 implementation (notably float formatting).
 pub fn canonicalize_json(val: &Value) -> String {
     match val {
         Value::Null => "null".to_string(),
@@ -17,7 +18,10 @@ pub fn canonicalize_json(val: &Value) -> String {
             format!("[{}]", items.join(","))
         }
         Value::Object(obj) => {
-            let sorted: BTreeMap<&String, &Value> = obj.iter().collect();
+            // RFC 8785 specifies UTF-16 key order, which differs from UTF-8
+            // lexical order for some supplementary-plane characters.
+            let mut sorted: Vec<_> = obj.iter().collect();
+            sorted.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
             let entries: Vec<String> = sorted
                 .into_iter()
                 .map(|(k, v)| {
@@ -55,15 +59,16 @@ fn get_store() -> &'static RwLock<EvidenceStore> {
 }
 
 pub fn add_record(mut record: Value) -> String {
-    let id = record.get("evidence_id")
+    let id = record
+        .get("evidence_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("ev_{}", digest_value(&record)));
 
-    if record.get("evidence_id").is_none() {
-        if let Some(obj) = record.as_object_mut() {
-            obj.insert("evidence_id".to_string(), json!(id));
-        }
+    if record.get("evidence_id").is_none()
+        && let Some(obj) = record.as_object_mut()
+    {
+        obj.insert("evidence_id".to_string(), json!(id));
     }
     let mut store = get_store().write().unwrap();
     store.records.insert(id.clone(), record);
@@ -76,7 +81,10 @@ pub fn get_record(evidence_id: &str) -> Option<Value> {
 }
 
 pub fn get_evidence_bundle(args: &Value) -> Value {
-    let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("complete");
+    let detail = args
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("complete");
     let store = get_store().read().unwrap();
 
     let records_vec: Vec<Value> = store.records.values().cloned().collect();
@@ -111,7 +119,10 @@ pub fn export_evidence_bundle(args: &Value) -> Value {
         Some(p) => p,
         None => return json!({ "status": "error", "message": "Missing 'path' argument" }),
     };
-    let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
+    let overwrite = args
+        .get("overwrite")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let p = std::path::Path::new(path_str);
     if p.exists() && !overwrite {
         return json!({ "status": "error", "message": format!("File {path_str} already exists. Set overwrite: true to replace.") });
@@ -132,7 +143,9 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
     };
     let data = match fs::read_to_string(path_str) {
         Ok(s) => s,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to read file: {e}") }),
+        Err(e) => {
+            return json!({ "status": "error", "message": format!("Failed to read file: {e}") });
+        }
     };
     let parsed: Value = match serde_json::from_str(&data) {
         Ok(v) => v,
@@ -168,8 +181,14 @@ pub fn import_evidence_bundle(args: &Value) -> Value {
 
 pub fn record_unknown(args: &Value) -> Value {
     let question = args.get("question").and_then(|v| v.as_str()).unwrap_or("");
-    let domain = args.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
-    let severity = args.get("severity").and_then(|v| v.as_str()).unwrap_or("medium");
+    let domain = args
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general");
+    let severity = args
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("medium");
     let unknown_id = format!("unk_{:x}", {
         let mut hasher = Sha256::new();
         hasher.update(question.as_bytes());
@@ -201,11 +220,17 @@ pub fn update_unknown(args: &Value) -> Value {
         Some(id) => id,
         None => return json!({ "status": "error", "message": "Missing unknown_id" }),
     };
-    let expected_rev = args.get("expected_revision").and_then(|v| v.as_u64()).unwrap_or(1);
+    let expected_rev = args
+        .get("expected_revision")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1);
 
     let mut store = get_store().write().unwrap();
     if let Some(existing) = store.unknowns.get_mut(unknown_id) {
-        let cur_rev = existing.get("revision").and_then(|v| v.as_u64()).unwrap_or(1);
+        let cur_rev = existing
+            .get("revision")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1);
         if cur_rev != expected_rev {
             return json!({ "status": "stale_revision", "current_revision": cur_rev, "expected_revision": expected_rev });
         }
@@ -232,22 +257,37 @@ pub fn list_unknowns(args: &Value) -> Value {
     let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-    let mut matches: Vec<&Value> = store.unknowns.values().filter(|u| {
-        if let Some(sf) = status_filter {
-            if u.get("status").and_then(|s| s.as_str()) != Some(sf) { return false; }
-        }
-        if let Some(sv) = severity_filter {
-            if u.get("severity").and_then(|s| s.as_str()) != Some(sv) { return false; }
-        }
-        if let Some(df) = domain_filter {
-            if u.get("domain").and_then(|s| s.as_str()) != Some(df) { return false; }
-        }
-        true
-    }).collect();
+    let mut matches: Vec<&Value> = store
+        .unknowns
+        .values()
+        .filter(|u| {
+            if let Some(sf) = status_filter
+                && u.get("status").and_then(|s| s.as_str()) != Some(sf)
+            {
+                return false;
+            }
+            if let Some(sv) = severity_filter
+                && u.get("severity").and_then(|s| s.as_str()) != Some(sv)
+            {
+                return false;
+            }
+            if let Some(df) = domain_filter
+                && u.get("domain").and_then(|s| s.as_str()) != Some(df)
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
 
     matches.sort_by_key(|u| u.get("unknown_id").and_then(|s| s.as_str()).unwrap_or(""));
     let total = matches.len();
-    let page: Vec<Value> = matches.into_iter().skip(offset).take(limit).cloned().collect();
+    let page: Vec<Value> = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .collect();
 
     json!({
         "total": total,
@@ -264,11 +304,12 @@ pub fn verify_unknown_resolution(args: &Value) -> Value {
     };
     let store = get_store().read().unwrap();
     if let Some(unk) = store.unknowns.get(unknown_id) {
-        let is_resolved = unk.get("status").and_then(|s| s.as_str()) == Some("resolved");
         json!({
             "unknown_id": unknown_id,
-            "status": if is_resolved { "verified" } else { "unresolved" },
-            "evidence_intact": true
+            "status": "unverified",
+            "evidence_intact": null,
+            "declared_status": unk.get("status"),
+            "reason": "Evidence references and the resolution claim have not been authenticated"
         })
     } else {
         json!({ "status": "error", "message": format!("Unknown {unknown_id} not found") })
@@ -278,7 +319,10 @@ pub fn verify_unknown_resolution(args: &Value) -> Value {
 pub fn inspect_analysis_view(args: &Value) -> Value {
     let source = args.get("source");
     let view = args.get("view");
-    let kind = view.and_then(|v| v.get("kind")).and_then(|k| k.as_str()).unwrap_or("summary");
+    let kind = view
+        .and_then(|v| v.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("summary");
 
     let ev_id = source
         .and_then(|s| s.get("evidence_id"))
@@ -302,10 +346,11 @@ pub fn inspect_analysis_view(args: &Value) -> Value {
 }
 
 pub fn compare_artifacts(args: &Value) -> Value {
-    let left = args.get("left");
-    let right = args.get("right");
-    let left_hash = left.map(digest_value).unwrap_or_default();
-    let right_hash = right.map(digest_value).unwrap_or_default();
+    let (Some(left), Some(right)) = (args.get("left"), args.get("right")) else {
+        return json!({"status": "error", "message": "Both 'left' and 'right' are required"});
+    };
+    let left_hash = digest_value(left);
+    let right_hash = digest_value(right);
 
     json!({
         "status": "complete",
@@ -317,14 +362,38 @@ pub fn compare_artifacts(args: &Value) -> Value {
 }
 
 pub fn compare_bundles(args: &Value) -> Value {
-    let left_path = args.get("left_bundle_path").and_then(|v| v.as_str()).unwrap_or("");
-    let right_path = args.get("right_bundle_path").and_then(|v| v.as_str()).unwrap_or("");
+    let (Some(left_path), Some(right_path)) = (
+        args.get("left_bundle_path").and_then(|v| v.as_str()),
+        args.get("right_bundle_path").and_then(|v| v.as_str()),
+    ) else {
+        return json!({"status": "error", "message": "Both bundle paths are required"});
+    };
 
-    let left_data = fs::read_to_string(left_path).unwrap_or_default();
-    let right_data = fs::read_to_string(right_path).unwrap_or_default();
+    let left_data = match fs::read_to_string(left_path) {
+        Ok(data) => data,
+        Err(err) => {
+            return json!({"status": "error", "message": format!("Cannot read left bundle: {err}")});
+        }
+    };
+    let right_data = match fs::read_to_string(right_path) {
+        Ok(data) => data,
+        Err(err) => {
+            return json!({"status": "error", "message": format!("Cannot read right bundle: {err}")});
+        }
+    };
 
-    let left_val: Value = serde_json::from_str(&left_data).unwrap_or(json!({}));
-    let right_val: Value = serde_json::from_str(&right_data).unwrap_or(json!({}));
+    let left_val: Value = match serde_json::from_str(&left_data) {
+        Ok(value) => value,
+        Err(err) => {
+            return json!({"status": "error", "message": format!("Invalid left bundle JSON: {err}")});
+        }
+    };
+    let right_val: Value = match serde_json::from_str(&right_data) {
+        Ok(value) => value,
+        Err(err) => {
+            return json!({"status": "error", "message": format!("Invalid right bundle JSON: {err}")});
+        }
+    };
 
     json!({
         "status": "complete",
@@ -340,39 +409,56 @@ pub fn build_reconstruction_obligation_ledger(args: &Value) -> Value {
     let closure_digest = digest_value(args);
 
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "closure_digest": closure_digest,
         "obligations_count": count,
-        "violations": []
+        "violations": null,
+        "reason": "Obligation validation and evidence authentication are not implemented"
     })
 }
 
 pub fn evaluate_reconstruction_coverage(args: &Value) -> Value {
-    let boundary = args.get("boundary_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let boundary = args
+        .get("boundary_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "boundary_id": boundary,
-        "coverage_percentage": 100.0,
-        "uncovered_surfaces": []
+        "coverage_percentage": null,
+        "uncovered_surfaces": null,
+        "reason": "No authenticated coverage inventory was evaluated"
     })
 }
 
 pub fn verify_reconstruction(_args: &Value) -> Value {
     json!({
-        "status": "pass",
-        "claims_verified": true,
-        "violations": []
+        "status": "unavailable",
+        "claims_verified": false,
+        "violations": null,
+        "reason": "Reconstruction verification requires evidence-backed claim evaluation"
     })
 }
 
 pub fn build_call_path(args: &Value) -> Value {
-    let start = args.get("start").and_then(|s| s.get("address")).and_then(|a| a.as_str()).unwrap_or("");
-    let goal = args.get("goal").and_then(|s| s.get("address")).and_then(|a| a.as_str()).unwrap_or("");
+    let start = args
+        .get("start")
+        .and_then(|s| s.get("address"))
+        .and_then(|a| a.as_str())
+        .unwrap_or("");
+    let goal = args
+        .get("goal")
+        .and_then(|s| s.get("address"))
+        .and_then(|a| a.as_str())
+        .unwrap_or("");
     json!({
-        "status": "complete",
-        "path": [start, goal],
-        "distance": if start == goal { 0 } else { 1 },
-        "reachability": "direct"
+        "status": "unavailable",
+        "start": start,
+        "goal": goal,
+        "path": null,
+        "distance": null,
+        "reachability": "unknown",
+        "reason": "No validated call graph was traversed"
     })
 }
 
@@ -382,18 +468,20 @@ pub fn compare_functions(args: &Value) -> Value {
     let left_h = left.map(digest_value).unwrap_or_default();
     let right_h = right.map(digest_value).unwrap_or_default();
     json!({
-        "status": "complete",
-        "identical": left_h == right_h,
-        "structural_similarity": if left_h == right_h { 1.0 } else { 0.5 }
+        "status": "unavailable",
+        "identical_input_payload": left.is_some() && right.is_some() && left_h == right_h,
+        "structural_similarity": null,
+        "reason": "Function bodies, graph structure and equivalence have not been compared"
     })
 }
 
 pub fn find_changed_behavior(args: &Value) -> Value {
     let comparisons = args.get("comparisons").and_then(|c| c.as_array());
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "findings_count": comparisons.map(|c| c.len()).unwrap_or(0),
-        "behavioral_changes": []
+        "behavioral_changes": null,
+        "reason": "Behavioral changes cannot be inferred from comparison count alone"
     })
 }
 
@@ -412,7 +500,10 @@ mod tests {
             }
         });
         let canonical = canonicalize_json(&val);
-        assert_eq!(canonical, r#"{"apple":2,"nested":{"alpha":false,"beta":true},"zebra":1}"#);
+        assert_eq!(
+            canonical,
+            r#"{"apple":2,"nested":{"alpha":false,"beta":true},"zebra":1}"#
+        );
     }
 
     #[test]
@@ -432,5 +523,42 @@ mod tests {
             "status": "resolved"
         }));
         assert_eq!(updated.get("status").unwrap().as_str(), Some("resolved"));
+        let verification = verify_unknown_resolution(&json!({"unknown_id": id}));
+        assert_eq!(verification["status"], "unverified");
+        assert!(verification["evidence_intact"].is_null());
+    }
+
+    #[test]
+    fn incomplete_reconstruction_never_claims_success() {
+        assert_eq!(
+            evaluate_reconstruction_coverage(&json!({}))["coverage_percentage"],
+            Value::Null
+        );
+        assert_eq!(verify_reconstruction(&json!({}))["status"], "unavailable");
+        assert_eq!(build_call_path(&json!({}))["reachability"], "unknown");
+        assert!(
+            compare_functions(&json!({"left": {}, "right": {}}))["structural_similarity"].is_null()
+        );
+        assert_eq!(
+            find_changed_behavior(&json!({"comparisons": []}))["status"],
+            "unavailable"
+        );
+        assert_eq!(
+            build_reconstruction_obligation_ledger(&json!({}))["status"],
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn bundle_comparison_refuses_missing_or_invalid_sources() {
+        assert_eq!(compare_artifacts(&json!({}))["status"], "error");
+        assert_eq!(compare_bundles(&json!({}))["status"], "error");
+        let nonexistent =
+            std::env::temp_dir().join(format!("rea_fast_missing_bundle_{}", std::process::id()));
+        let result = compare_bundles(&json!({
+            "left_bundle_path": nonexistent,
+            "right_bundle_path": nonexistent
+        }));
+        assert_eq!(result["status"], "error");
     }
 }

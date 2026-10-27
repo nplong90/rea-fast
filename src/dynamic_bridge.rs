@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     env,
@@ -106,10 +106,10 @@ impl DynamicBridge {
         let header_str = String::from_utf8_lossy(&header_bytes);
         let mut content_length = 0usize;
         for line in header_str.lines() {
-            if line.to_ascii_lowercase().starts_with("content-length:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    content_length = val.trim().parse().unwrap_or(0);
-                }
+            if line.to_ascii_lowercase().starts_with("content-length:")
+                && let Some(val) = line.split(':').nth(1)
+            {
+                content_length = val.trim().parse().unwrap_or(0);
             }
         }
 
@@ -119,7 +119,9 @@ impl DynamicBridge {
         } else {
             let mut chunk = [0u8; 4096];
             while let Ok(n) = stream.read(&mut chunk) {
-                if n == 0 { break; }
+                if n == 0 {
+                    break;
+                }
                 body.extend_from_slice(&chunk[..n]);
             }
         }
@@ -133,7 +135,11 @@ impl DynamicBridge {
         let all = Self::query_cdp_targets(endpoint)?;
         let filtered: Vec<CdpTarget> = all
             .into_iter()
-            .filter(|t| t.url.starts_with("file://") || t.target_type == "page" || t.target_type == "webview")
+            .filter(|t| {
+                t.url.starts_with("file://")
+                    || t.target_type == "page"
+                    || t.target_type == "webview"
+            })
             .collect();
         Ok(filtered)
     }
@@ -239,8 +245,16 @@ impl DynamicBridge {
             .get("ro.kernel.qemu")
             .map(|v| v == "1")
             .unwrap_or_else(|| {
-                model.as_deref().unwrap_or("").to_lowercase().contains("emulator")
-                    || model.as_deref().unwrap_or("").to_lowercase().contains("sdk")
+                model
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains("emulator")
+                    || model
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains("sdk")
             });
 
         Ok(AdbDeviceProps {
@@ -260,19 +274,23 @@ impl DynamicBridge {
         let mut map = BTreeMap::new();
         for line in output.lines() {
             let line = line.trim();
-            if line.starts_with('[') && line.contains("]: [") {
-                if let Some(split) = line.find("]: [") {
-                    let key = &line[1..split];
-                    let val = line[split + 4..].trim_end_matches(']');
-                    map.insert(key.to_string(), val.to_string());
-                }
+            if line.starts_with('[')
+                && line.contains("]: [")
+                && let Some(split) = line.find("]: [")
+            {
+                let key = &line[1..split];
+                let val = line[split + 4..].trim_end_matches(']');
+                map.insert(key.to_string(), val.to_string());
             }
         }
         map
     }
 
     /// List installed packages on device via `adb shell pm list packages`
-    pub fn list_adb_packages(serial: Option<&str>, third_party_only: bool) -> Result<Vec<String>, Box<dyn Error>> {
+    pub fn list_adb_packages(
+        serial: Option<&str>,
+        third_party_only: bool,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
         let mut cmd = Command::new("adb");
         if let Some(s) = serial {
             cmd.args(["-s", s]);
@@ -300,7 +318,9 @@ impl DynamicBridge {
     // ==========================================
 
     /// List live processes on host system
-    pub fn list_live_processes(filter: Option<&str>) -> Result<Vec<LiveProcessSummary>, Box<dyn Error>> {
+    pub fn list_live_processes(
+        filter: Option<&str>,
+    ) -> Result<Vec<LiveProcessSummary>, Box<dyn Error>> {
         let mut results = Vec::new();
 
         #[cfg(target_os = "linux")]
@@ -325,12 +345,11 @@ impl DynamicBridge {
                             .map(|s| s.trim().to_string())
                             .unwrap_or_else(|_| name_str.to_string());
 
-                        if let Some(f) = filter {
-                            if !comm.to_lowercase().contains(&f.to_lowercase())
-                                && !cmdline.to_lowercase().contains(&f.to_lowercase())
-                            {
-                                continue;
-                            }
+                        if let Some(f) = filter
+                            && !comm.to_lowercase().contains(&f.to_lowercase())
+                            && !cmdline.to_lowercase().contains(&f.to_lowercase())
+                        {
+                            continue;
                         }
 
                         results.push(LiveProcessSummary {
@@ -415,10 +434,16 @@ impl DynamicBridge {
                             "PPid" => ppid = v.parse::<u32>().ok(),
                             "Threads" => threads = v.parse::<u32>().ok(),
                             "VmSize" => {
-                                memory_vmsize_kb = v.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
+                                memory_vmsize_kb = v
+                                    .split_whitespace()
+                                    .next()
+                                    .and_then(|n| n.parse::<u64>().ok());
                             }
                             "VmRSS" => {
-                                memory_vmrss_kb = v.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
+                                memory_vmrss_kb = v
+                                    .split_whitespace()
+                                    .next()
+                                    .and_then(|n| n.parse::<u64>().ok());
                             }
                             _ => {}
                         }
@@ -599,11 +624,21 @@ impl DynamicBridge {
     }
 
     pub fn run_objdump(args: &[&str]) -> Value {
-        Self::run_optional_bridge("objdump", "apt install binutils || brew install binutils", args, 10)
+        Self::run_optional_bridge(
+            "objdump",
+            "apt install binutils || brew install binutils",
+            args,
+            10,
+        )
     }
 
     pub fn run_rizin(args: &[&str]) -> Value {
-        Self::run_optional_bridge("rizin", "apt install rizin || https://github.com/rizinorg/rizin", args, 10)
+        Self::run_optional_bridge(
+            "rizin",
+            "apt install rizin || https://github.com/rizinorg/rizin",
+            args,
+            10,
+        )
     }
 
     pub fn run_sigrok(args: &[&str]) -> Value {
@@ -614,7 +649,12 @@ impl DynamicBridge {
         if Self::find_in_path("jadx").is_some() {
             Self::run_optional_bridge("jadx", "apt install jadx || brew install jadx", args, 30)
         } else {
-            Self::run_optional_bridge("apktool", "apt install apktool || brew install apktool", args, 30)
+            Self::run_optional_bridge(
+                "apktool",
+                "apt install apktool || brew install apktool",
+                args,
+                30,
+            )
         }
     }
 }
@@ -657,7 +697,12 @@ mod tests {
 
     #[test]
     fn test_optional_bridge_unavailable() {
-        let res = DynamicBridge::run_optional_bridge("definitely_non_existent_binary_xyz123", "hint", &[], 1);
+        let res = DynamicBridge::run_optional_bridge(
+            "definitely_non_existent_binary_xyz123",
+            "hint",
+            &[],
+            1,
+        );
         assert_eq!(res["status"], "unavailable");
         assert_eq!(res["tool"], "definitely_non_existent_binary_xyz123");
         assert_eq!(res["install_hint"], "hint");

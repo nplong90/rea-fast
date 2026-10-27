@@ -31,10 +31,18 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::Serialize;
 use serde_json::json;
-use std::{error::Error, io::{self, Write}, path::{Path, PathBuf}, time::Instant};
+use std::{
+    error::Error,
+    io::{self, Write},
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 #[derive(Parser)]
-#[command(version, about = "Parallel, non-executing JavaScript/TypeScript structural analysis & REA toolkit")]
+#[command(
+    version,
+    about = "Parallel, non-executing JavaScript/TypeScript structural analysis & REA toolkit"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -73,13 +81,9 @@ enum Commands {
         max_file_bytes: u64,
     },
     /// Inspect Electron fuse bytes in binary executable
-    Fuses {
-        path: PathBuf,
-    },
+    Fuses { path: PathBuf },
     /// Inspect Chromium Pickle ASAR directory header without unpacking
-    InspectAsar {
-        path: PathBuf,
-    },
+    InspectAsar { path: PathBuf },
     /// Extract files from ASAR archive with integrity verification
     Extract {
         path: PathBuf,
@@ -99,10 +103,7 @@ enum Commands {
         rewrite_level: String,
     },
     /// Compare two application graphs or paths
-    Diff {
-        left: String,
-        right: String,
-    },
+    Diff { left: String, right: String },
     /// Compare export shapes between modules across application graphs
     ExportShapes {
         #[arg(long)]
@@ -159,10 +160,7 @@ enum Commands {
         output_dir: Option<PathBuf>,
     },
     /// Pack a directory of files into a Chromium Pickle ASAR archive with SHA-256 block hashing
-    PackAsar {
-        src_dir: PathBuf,
-        output: PathBuf,
-    },
+    PackAsar { src_dir: PathBuf, output: PathBuf },
     /// Scan files, directory, or inline string for high-entropy secrets and exposed API endpoints
     Secrets {
         path: Option<PathBuf>,
@@ -176,33 +174,19 @@ enum Commands {
         output_dir: Option<PathBuf>,
     },
     /// Inspect binary layout (sections, entry point, symbols, imports) for ELF, PE, Mach-O
-    InspectBinary {
-        path: PathBuf,
-    },
+    InspectBinary { path: PathBuf },
     /// Inspect embedded Go buildinfo, version, module path, dependencies
-    InspectGo {
-        path: PathBuf,
-    },
+    InspectGo { path: PathBuf },
     /// Inspect Rust compiler commit and cargo-auditable dependency graph
-    InspectRust {
-        path: PathBuf,
-    },
+    InspectRust { path: PathBuf },
     /// Inspect WebAssembly binary sections, imports, and exports
-    InspectWasm {
-        path: PathBuf,
-    },
+    InspectWasm { path: PathBuf },
     /// Inspect Android APK manifest, permissions, activities, dex, and native libraries
-    InspectApk {
-        path: PathBuf,
-    },
+    InspectApk { path: PathBuf },
     /// Inspect SQLite database header, page size, cookies, and table schemas
-    InspectSqlite {
-        path: PathBuf,
-    },
+    InspectSqlite { path: PathBuf },
     /// Inspect PCAP / PCAPNG packet captures (protocols, IP/port sets, packet counts)
-    InspectPcap {
-        path: PathBuf,
-    },
+    InspectPcap { path: PathBuf },
     /// List targets from loopback Chrome/Electron CDP endpoint
     ListCdpTargets {
         #[arg(long, default_value = "http://127.0.0.1:9222")]
@@ -257,9 +241,7 @@ enum Commands {
         filter: Option<String>,
     },
     /// Inspect detailed live host process state, memory, threads, and mapped libraries
-    InspectProcess {
-        pid: u32,
-    },
+    InspectProcess { pid: u32 },
     /// Execute GDB bridge if installed or print diagnostic installation instructions
     Gdb {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -291,34 +273,22 @@ enum Commands {
         args: Vec<String>,
     },
     /// Inspect binary or XML Apple property list (.plist) file
-    InspectPlist {
-        path: PathBuf,
-    },
+    InspectPlist { path: PathBuf },
     /// Project Apple Application Graph (.app, Frameworks, PlugIns, XPC)
-    ProjectApple {
-        path: PathBuf,
-    },
+    ProjectApple { path: PathBuf },
     /// Inspect .NET PE CLI metadata or IL2CPP global-metadata.dat
-    InspectManaged {
-        path: PathBuf,
-    },
+    InspectManaged { path: PathBuf },
     /// Query or export Evidence DAG and residual unknowns
     EvidenceBundle {
         #[arg(short, long)]
         export: Option<PathBuf>,
     },
     /// Inspect universal artifact (ASAR, APK, SQLite, PCAP, Plist, ELF, Mach-O, PE, WASM)
-    InspectArtifact {
-        path: PathBuf,
-    },
+    InspectArtifact { path: PathBuf },
     /// Inspect machine learning model artifact (GGUF, SafeTensors, TFLite)
-    InspectModel {
-        path: PathBuf,
-    },
+    InspectModel { path: PathBuf },
     /// Inspect Shannon byte entropy of file or binary sections
-    InspectEntropy {
-        path: PathBuf,
-    },
+    InspectEntropy { path: PathBuf },
     /// Extract printable ASCII strings from file or binary
     Strings {
         path: PathBuf,
@@ -326,9 +296,7 @@ enum Commands {
         min_len: usize,
     },
     /// Identify Flutter framework build, libraries, and assets
-    IdentifyFlutter {
-        path: PathBuf,
-    },
+    IdentifyFlutter { path: PathBuf },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -338,7 +306,11 @@ enum CliIntegrityPolicy {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
-enum Format { Summary, Json, JsonSummary }
+enum Format {
+    Summary,
+    Json,
+    JsonSummary,
+}
 
 #[derive(Default, Serialize)]
 struct Summary {
@@ -365,14 +337,24 @@ fn is_asar(path: &Path) -> bool {
 }
 
 fn supported(path: &Path) -> bool {
-    matches!(path.extension().and_then(|s| s.to_str()), Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts"))
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "mts" | "cts")
+    )
 }
 
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
-    for entry in WalkBuilder::new(root).hidden(true).git_ignore(true).require_git(false)
-        .filter_entry(|entry| !entry.file_type().is_some_and(|t| t.is_dir()) || !matches!(entry.file_name().to_str(), Some("node_modules" | ".git")))
-        .build() {
+    for entry in WalkBuilder::new(root)
+        .hidden(true)
+        .git_ignore(true)
+        .require_git(false)
+        .filter_entry(|entry| {
+            !entry.file_type().is_some_and(|t| t.is_dir())
+                || !matches!(entry.file_name().to_str(), Some("node_modules" | ".git"))
+        })
+        .build()
+    {
         let entry = entry?;
         if entry.file_type().is_some_and(|t| t.is_file()) && supported(entry.path()) {
             files.push(entry.into_path());
@@ -406,45 +388,72 @@ fn execute_analysis(
     if input.is_file() && !supported(&input) && !is_asar(&input) {
         return Err("Expected a JS/TS file, directory, or .asar archive".into());
     }
-    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()?;
     let results: Vec<_> = if is_asar(&input) {
         let archive = asar::AsarArchive::open(&input)?;
-        let entries: Vec<_> = archive.entries.iter().filter(|e| supported(Path::new(&e.path))).cloned().collect();
-        if entries.is_empty() { return Err("No JS/TS files found in ASAR".into()); }
+        let entries: Vec<_> = archive
+            .entries
+            .iter()
+            .filter(|e| supported(Path::new(&e.path)))
+            .cloned()
+            .collect();
+        if entries.is_empty() {
+            return Err("No JS/TS files found in ASAR".into());
+        }
         pool.install(|| {
-            entries.par_iter().map(|entry| {
-                if entry.size > max_file_bytes {
-                    return analyze::FileAnalysis {
-                        path: entry.path.clone(),
-                        error: Some(format!("File exceeds --max-file-bytes={max_file_bytes}")),
-                        ..Default::default()
-                    };
-                }
-                match archive.read_file(entry) {
-                    Ok(bytes) => match std::str::from_utf8(&bytes) {
-                        Ok(source) => analyze::analyze_source(source, &entry.path),
-                        Err(_) => analyze::FileAnalysis {
+            entries
+                .par_iter()
+                .map(|entry| {
+                    if entry.size > max_file_bytes {
+                        return analyze::FileAnalysis {
                             path: entry.path.clone(),
-                            error: Some("File is not valid UTF-8".into()),
+                            error: Some(format!("File exceeds --max-file-bytes={max_file_bytes}")),
+                            ..Default::default()
+                        };
+                    }
+                    match archive.read_file(entry) {
+                        Ok(bytes) => match std::str::from_utf8(&bytes) {
+                            Ok(source) => analyze::analyze_source(source, &entry.path),
+                            Err(_) => analyze::FileAnalysis {
+                                path: entry.path.clone(),
+                                error: Some("File is not valid UTF-8".into()),
+                                ..Default::default()
+                            },
+                        },
+                        Err(e) => analyze::FileAnalysis {
+                            path: entry.path.clone(),
+                            error: Some(e.to_string()),
                             ..Default::default()
                         },
-                    },
-                    Err(e) => analyze::FileAnalysis {
-                        path: entry.path.clone(),
-                        error: Some(e.to_string()),
-                        ..Default::default()
-                    },
-                }
-            }).collect()
+                    }
+                })
+                .collect()
         })
     } else {
-        let root = if input.is_file() { input.parent().ok_or("File has no parent")? } else { &input };
+        let root = if input.is_file() {
+            input.parent().ok_or("File has no parent")?
+        } else {
+            &input
+        };
         let files = collect_files(&input)?;
-        if files.is_empty() { return Err("No JS/TS files matched the ignore rules".into()); }
-        pool.install(|| files.par_iter().map(|path| analyze::analyze_file(path, root, max_file_bytes)).collect())
+        if files.is_empty() {
+            return Err("No JS/TS files matched the ignore rules".into());
+        }
+        pool.install(|| {
+            files
+                .par_iter()
+                .map(|path| analyze::analyze_file(path, root, max_file_bytes))
+                .collect()
+        })
     };
     let dependencies = graph::dependencies(&results);
-    let mut summary = Summary { total_files: results.len(), threads_used: pool.current_num_threads(), ..Summary::default() };
+    let mut summary = Summary {
+        total_files: results.len(),
+        threads_used: pool.current_num_threads(),
+        ..Summary::default()
+    };
     for file in &results {
         summary.total_bytes += file.bytes;
         summary.total_lines += file.lines;
@@ -456,8 +465,16 @@ fn execute_analysis(
         summary.parse_errors += file.parse_errors;
         summary.unavailable_files += usize::from(file.error.is_some());
     }
-    summary.internal_dependencies = dependencies.iter().flatten().filter(|d| d.target.is_some()).count();
-    summary.unresolved_dependencies = dependencies.iter().flatten().filter(|d| d.target.is_none()).count();
+    summary.internal_dependencies = dependencies
+        .iter()
+        .flatten()
+        .filter(|d| d.target.is_some())
+        .count();
+    summary.unresolved_dependencies = dependencies
+        .iter()
+        .flatten()
+        .filter(|d| d.target.is_none())
+        .count();
     let elapsed = start.elapsed().as_secs_f64();
     summary.elapsed_ms = elapsed * 1000.0;
     summary.files_per_second = summary.total_files as f64 / elapsed;
@@ -466,17 +483,36 @@ fn execute_analysis(
     match format {
         Format::Json => graph::write_graph(&mut out, &results, &dependencies, max_file_bytes)?,
         Format::JsonSummary => serde_json::to_writer(&mut out, &summary)?,
-        Format::Summary => write!(out,
+        Format::Summary => write!(
+            out,
             "Files       {:>12}\nLOC         {:>12}\nBytes       {:>12}\nImports     {:>12}\nExports     {:>12}\nFunctions   {:>12}\nClasses     {:>12}\nSymbols     {:>12}\nParse errors{:>12}\nUnavailable {:>12}\nInternal dependencies {:>6}\nUnresolved/external   {:>6}\nThreads     {:>12}\nAnalysis ms {:>12.2}\nFiles/s     {:>12.0}\nMiB/s       {:>12.2}\n",
-            summary.total_files, summary.total_lines, summary.total_bytes, summary.total_imports,
-            summary.total_exports, summary.total_functions, summary.total_classes, summary.total_symbols,
-            summary.parse_errors, summary.unavailable_files, summary.internal_dependencies,
-            summary.unresolved_dependencies, summary.threads_used, summary.elapsed_ms,
-            summary.files_per_second, summary.mb_per_second)?,
+            summary.total_files,
+            summary.total_lines,
+            summary.total_bytes,
+            summary.total_imports,
+            summary.total_exports,
+            summary.total_functions,
+            summary.total_classes,
+            summary.total_symbols,
+            summary.parse_errors,
+            summary.unavailable_files,
+            summary.internal_dependencies,
+            summary.unresolved_dependencies,
+            summary.threads_used,
+            summary.elapsed_ms,
+            summary.files_per_second,
+            summary.mb_per_second
+        )?,
     }
     writeln!(out)?;
     out.flush()?;
-    if summary.unavailable_files > 0 { return Err(format!("{} files unavailable; output retains partial results", summary.unavailable_files).into()); }
+    if summary.unavailable_files > 0 {
+        return Err(format!(
+            "{} files unavailable; output retains partial results",
+            summary.unavailable_files
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -558,7 +594,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "right_module_path": right_module,
                     "right_export_name": right_export,
                 });
-                print_tool_result(mcp::handle_tool_call("compare_javascript_export_shapes", &args))
+                print_tool_result(mcp::handle_tool_call(
+                    "compare_javascript_export_shapes",
+                    &args,
+                ))
             }
             Commands::TraceFeature {
                 app,
@@ -682,7 +721,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let args = json!({ "cdp_endpoint": endpoint });
                 print_tool_result(mcp::handle_tool_call("list_electron_targets", &args))
             }
-            Commands::Screenshot { endpoint, target_id, output } => {
+            Commands::Screenshot {
+                endpoint,
+                target_id,
+                output,
+            } => {
                 let mut args = json!({ "cdp_endpoint": endpoint });
                 if let Some(t) = target_id {
                     args["target_id"] = json!(t);
@@ -692,14 +735,21 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 print_tool_result(mcp::handle_tool_call("capture_web_screenshot", &args))
             }
-            Commands::Eval { endpoint, target_id, expression } => {
+            Commands::Eval {
+                endpoint,
+                target_id,
+                expression,
+            } => {
                 let mut args = json!({ "cdp_endpoint": endpoint, "expression": expression });
                 if let Some(t) = target_id {
                     args["target_id"] = json!(t);
                 }
                 print_tool_result(mcp::handle_tool_call("evaluate_web_script", &args))
             }
-            Commands::InspectWebPage { endpoint, target_id } => {
+            Commands::InspectWebPage {
+                endpoint,
+                target_id,
+            } => {
                 let mut args = json!({ "cdp_endpoint": endpoint });
                 if let Some(t) = target_id {
                     args["target_id"] = json!(t);
@@ -717,7 +767,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 print_tool_result(mcp::handle_tool_call("inspect_adb_device", &args))
             }
-            Commands::ListAdbPackages { serial, third_party } => {
+            Commands::ListAdbPackages {
+                serial,
+                third_party,
+            } => {
                 let mut args = json!({ "third_party_only": third_party });
                 if let Some(s) = serial {
                     args["serial"] = json!(s);
@@ -767,7 +820,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                 let args = json!({
                     "inventory_evidence": [{ "path": path.to_string_lossy() }]
                 });
-                print_tool_result(mcp::handle_tool_call("project_apple_application_graph", &args))
+                print_tool_result(mcp::handle_tool_call(
+                    "project_apple_application_graph",
+                    &args,
+                ))
             }
             Commands::InspectManaged { path } => {
                 let args = json!({ "path": path.to_string_lossy() });
@@ -812,7 +868,12 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        if error.downcast_ref::<io::Error>().is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe) { return; }
+        if error
+            .downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
+        {
+            return;
+        }
         eprintln!("rea-fast: {error}");
         std::process::exit(1);
     }

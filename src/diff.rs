@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,31 +69,62 @@ impl ApplicationDiffer {
         }
     }
 
-    pub fn compare_applications(left_val: &Value, right_val: &Value) -> Result<ApplicationGraphDiff, String> {
+    pub fn compare_applications(
+        left_val: &Value,
+        right_val: &Value,
+    ) -> Result<ApplicationGraphDiff, String> {
         let left_graph = Self::extract_graph_payload(left_val)
             .ok_or_else(|| "Left input contains no valid application graph payload".to_string())?;
         let right_graph = Self::extract_graph_payload(right_val)
             .ok_or_else(|| "Right input contains no valid application graph payload".to_string())?;
 
-        let left_nodes = left_graph.get("nodes").or_else(|| left_graph.get("modules")).and_then(|n| n.as_array()).cloned().unwrap_or_default();
-        let right_nodes = right_graph.get("nodes").or_else(|| right_graph.get("modules")).and_then(|n| n.as_array()).cloned().unwrap_or_default();
+        let left_nodes = left_graph
+            .get("nodes")
+            .or_else(|| left_graph.get("modules"))
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let right_nodes = right_graph
+            .get("nodes")
+            .or_else(|| right_graph.get("modules"))
+            .and_then(|n| n.as_array())
+            .cloned()
+            .unwrap_or_default();
 
         let mut left_by_path: HashMap<String, &Value> = HashMap::new();
         let mut left_by_sha: HashMap<String, Vec<String>> = HashMap::new();
         for node in &left_nodes {
-            if let Some(path) = node.pointer("/identity/path").or_else(|| node.get("path")).and_then(|p| p.as_str()) {
+            if let Some(path) = node
+                .pointer("/identity/path")
+                .or_else(|| node.get("path"))
+                .and_then(|p| p.as_str())
+            {
                 left_by_path.insert(path.to_string(), node);
             }
-            if let Some(sha) = node.pointer("/identity/artifact_sha256").or_else(|| node.get("sha256")).or_else(|| node.get("artifact_sha256")).and_then(|s| s.as_str()) {
-                if let Some(path) = node.pointer("/identity/path").or_else(|| node.get("path")).and_then(|p| p.as_str()) {
-                    left_by_sha.entry(sha.to_string()).or_default().push(path.to_string());
-                }
+            if let Some(sha) = node
+                .pointer("/identity/artifact_sha256")
+                .or_else(|| node.get("sha256"))
+                .or_else(|| node.get("artifact_sha256"))
+                .and_then(|s| s.as_str())
+                && let Some(path) = node
+                    .pointer("/identity/path")
+                    .or_else(|| node.get("path"))
+                    .and_then(|p| p.as_str())
+            {
+                left_by_sha
+                    .entry(sha.to_string())
+                    .or_default()
+                    .push(path.to_string());
             }
         }
 
         let mut right_by_path: HashMap<String, &Value> = HashMap::new();
         for node in &right_nodes {
-            if let Some(path) = node.pointer("/identity/path").or_else(|| node.get("path")).and_then(|p| p.as_str()) {
+            if let Some(path) = node
+                .pointer("/identity/path")
+                .or_else(|| node.get("path"))
+                .and_then(|p| p.as_str())
+            {
                 right_by_path.insert(path.to_string(), node);
             }
         }
@@ -107,10 +138,14 @@ impl ApplicationDiffer {
 
         // 1. Process right nodes against left
         for (r_path, r_node) in &right_by_path {
-            let r_sha = r_node.pointer("/identity/artifact_sha256").and_then(|s| s.as_str());
+            let r_sha = r_node
+                .pointer("/identity/artifact_sha256")
+                .and_then(|s| s.as_str());
 
             if let Some(l_node) = left_by_path.get(r_path) {
-                let l_sha = l_node.pointer("/identity/artifact_sha256").and_then(|s| s.as_str());
+                let l_sha = l_node
+                    .pointer("/identity/artifact_sha256")
+                    .and_then(|s| s.as_str());
 
                 if l_sha.is_some() && l_sha == r_sha {
                     unchanged_modules.push(r_path.clone());
@@ -128,7 +163,11 @@ impl ApplicationDiffer {
                     Self::diff_module_properties(l_node, r_node, &mut changes);
 
                     let entity_diff = EntityDiff {
-                        id: r_node.get("node_id").and_then(|id| id.as_str()).unwrap_or(r_path).to_string(),
+                        id: r_node
+                            .get("node_id")
+                            .and_then(|id| id.as_str())
+                            .unwrap_or(r_path)
+                            .to_string(),
                         path: r_path.clone(),
                         kind: "source-module".to_string(),
                         changes,
@@ -138,26 +177,30 @@ impl ApplicationDiffer {
                 }
             } else {
                 // Not found by path. Check if it was renamed by matching exact artifact_sha256
-                if let Some(sha) = r_sha {
-                    if let Some(matching_left_paths) = left_by_sha.get(sha) {
-                        if matching_left_paths.len() == 1 {
-                            let old_path = &matching_left_paths[0];
-                            changed_from.insert(r_path.clone(), old_path.clone());
-                            changed_modules.push(EntityDiff {
-                                id: r_node.get("node_id").and_then(|id| id.as_str()).unwrap_or(r_path).to_string(),
-                                path: r_path.clone(),
-                                kind: "source-module-renamed".to_string(),
-                                changes: vec![FieldDiff {
-                                    pointer: "/identity/path".to_string(),
-                                    status: "renamed".to_string(),
-                                    left: Some(json!(old_path)),
-                                    right: Some(json!(r_path)),
-                                }],
-                            });
-                            continue;
-                        } else if matching_left_paths.len() > 1 {
-                            ambiguous.push(format!("Multiple candidates for renamed module: {r_path}"));
-                        }
+                if let Some(sha) = r_sha
+                    && let Some(matching_left_paths) = left_by_sha.get(sha)
+                {
+                    if matching_left_paths.len() == 1 {
+                        let old_path = &matching_left_paths[0];
+                        changed_from.insert(r_path.clone(), old_path.clone());
+                        changed_modules.push(EntityDiff {
+                            id: r_node
+                                .get("node_id")
+                                .and_then(|id| id.as_str())
+                                .unwrap_or(r_path)
+                                .to_string(),
+                            path: r_path.clone(),
+                            kind: "source-module-renamed".to_string(),
+                            changes: vec![FieldDiff {
+                                pointer: "/identity/path".to_string(),
+                                status: "renamed".to_string(),
+                                left: Some(json!(old_path)),
+                                right: Some(json!(r_path)),
+                            }],
+                        });
+                        continue;
+                    } else if matching_left_paths.len() > 1 {
+                        ambiguous.push(format!("Multiple candidates for renamed module: {r_path}"));
                     }
                 }
                 added_modules.push(r_path.clone());
@@ -177,21 +220,44 @@ impl ApplicationDiffer {
         changed_modules.sort_by(|a, b| a.path.cmp(&b.path));
 
         // 3. Diff edges
-        let left_edges = left_graph.get("edges").and_then(|e| e.as_array()).cloned().unwrap_or_default();
-        let right_edges = right_graph.get("edges").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+        let left_edges = left_graph
+            .get("edges")
+            .and_then(|e| e.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let right_edges = right_graph
+            .get("edges")
+            .and_then(|e| e.as_array())
+            .cloned()
+            .unwrap_or_default();
 
         let edge_key = |edge: &Value| -> String {
-            let src = edge.get("source_node_id").and_then(|v| v.as_str()).unwrap_or("");
-            let tgt = edge.get("target_node_id").and_then(|v| v.as_str()).unwrap_or("");
-            let rel = edge.get("relation").and_then(|v| v.as_str()).unwrap_or("imports");
+            let src = edge
+                .get("source_node_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let tgt = edge
+                .get("target_node_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let rel = edge
+                .get("relation")
+                .and_then(|v| v.as_str())
+                .unwrap_or("imports");
             format!("{src}->{tgt}:{rel}")
         };
 
         let left_edge_keys: HashSet<String> = left_edges.iter().map(edge_key).collect();
         let right_edge_keys: HashSet<String> = right_edges.iter().map(edge_key).collect();
 
-        let mut added_edges: Vec<String> = right_edge_keys.difference(&left_edge_keys).cloned().collect();
-        let mut removed_edges: Vec<String> = left_edge_keys.difference(&right_edge_keys).cloned().collect();
+        let mut added_edges: Vec<String> = right_edge_keys
+            .difference(&left_edge_keys)
+            .cloned()
+            .collect();
+        let mut removed_edges: Vec<String> = left_edge_keys
+            .difference(&right_edge_keys)
+            .cloned()
+            .collect();
         added_edges.sort();
         removed_edges.sort();
 
@@ -219,18 +285,34 @@ impl ApplicationDiffer {
     }
 
     fn diff_module_properties(l_node: &Value, r_node: &Value, changes: &mut Vec<FieldDiff>) {
-        let l_props = l_node.pointer("/observations/0/properties").or_else(|| l_node.get("properties")).or(Some(l_node));
-        let r_props = r_node.pointer("/observations/0/properties").or_else(|| r_node.get("properties")).or(Some(r_node));
+        let l_props = l_node
+            .pointer("/observations/0/properties")
+            .or_else(|| l_node.get("properties"))
+            .or(Some(l_node));
+        let r_props = r_node
+            .pointer("/observations/0/properties")
+            .or_else(|| r_node.get("properties"))
+            .or(Some(r_node));
 
         if let (Some(lp), Some(rp)) = (l_props, r_props) {
             let extract_name = |val: &Value| -> Option<String> {
-                val.get("name").and_then(|n| n.as_str()).map(ToString::to_string)
+                val.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(ToString::to_string)
                     .or_else(|| val.as_str().map(ToString::to_string))
             };
 
             // Exports diff
-            let l_exports = lp.get("exports").and_then(|e| e.as_array()).cloned().unwrap_or_default();
-            let r_exports = rp.get("exports").and_then(|e| e.as_array()).cloned().unwrap_or_default();
+            let l_exports = lp
+                .get("exports")
+                .and_then(|e| e.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let r_exports = rp
+                .get("exports")
+                .and_then(|e| e.as_array())
+                .cloned()
+                .unwrap_or_default();
 
             let l_exp_names: HashSet<String> = l_exports.iter().filter_map(extract_name).collect();
             let r_exp_names: HashSet<String> = r_exports.iter().filter_map(extract_name).collect();
@@ -254,8 +336,16 @@ impl ApplicationDiffer {
             }
 
             // Functions diff
-            let l_funcs = lp.get("functions").and_then(|f| f.as_array()).cloned().unwrap_or_default();
-            let r_funcs = rp.get("functions").and_then(|f| f.as_array()).cloned().unwrap_or_default();
+            let l_funcs = lp
+                .get("functions")
+                .and_then(|f| f.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let r_funcs = rp
+                .get("functions")
+                .and_then(|f| f.as_array())
+                .cloned()
+                .unwrap_or_default();
 
             let l_fn_names: HashSet<String> = l_funcs.iter().filter_map(extract_name).collect();
             let r_fn_names: HashSet<String> = r_funcs.iter().filter_map(extract_name).collect();
@@ -294,11 +384,18 @@ impl ApplicationDiffer {
             .ok_or_else(|| "Right input contains no valid application graph payload".to_string())?;
 
         let find_export = |graph: &Value, mod_path: &str, exp_name: &str| -> Option<Value> {
-            let nodes = graph.get("nodes").or_else(|| graph.get("modules"))?.as_array()?;
+            let nodes = graph
+                .get("nodes")
+                .or_else(|| graph.get("modules"))?
+                .as_array()?;
             for node in nodes {
-                let p = node.pointer("/identity/path").or_else(|| node.get("path"))?.as_str()?;
+                let p = node
+                    .pointer("/identity/path")
+                    .or_else(|| node.get("path"))?
+                    .as_str()?;
                 if p == mod_path {
-                    let exports = node.pointer("/observations/0/properties/exports")
+                    let exports = node
+                        .pointer("/observations/0/properties/exports")
                         .or_else(|| node.pointer("/properties/exports"))
                         .or_else(|| node.get("exports"))?
                         .as_array()?;
@@ -306,7 +403,11 @@ impl ApplicationDiffer {
                         if exp.get("name").and_then(|n| n.as_str()) == Some(exp_name)
                             || exp.as_str() == Some(exp_name)
                         {
-                            return Some(if exp.is_object() { exp.clone() } else { json!({"name": exp_name}) });
+                            return Some(if exp.is_object() {
+                                exp.clone()
+                            } else {
+                                json!({"name": exp_name})
+                            });
                         }
                     }
                 }
@@ -315,11 +416,18 @@ impl ApplicationDiffer {
         };
 
         let find_function = |graph: &Value, mod_path: &str, fn_name: &str| -> Option<Value> {
-            let nodes = graph.get("nodes").or_else(|| graph.get("modules"))?.as_array()?;
+            let nodes = graph
+                .get("nodes")
+                .or_else(|| graph.get("modules"))?
+                .as_array()?;
             for node in nodes {
-                let p = node.pointer("/identity/path").or_else(|| node.get("path"))?.as_str()?;
+                let p = node
+                    .pointer("/identity/path")
+                    .or_else(|| node.get("path"))?
+                    .as_str()?;
                 if p == mod_path {
-                    let funcs = node.pointer("/observations/0/properties/functions")
+                    let funcs = node
+                        .pointer("/observations/0/properties/functions")
                         .or_else(|| node.pointer("/properties/functions"))
                         .or_else(|| node.get("functions"))?
                         .as_array()?;
@@ -327,7 +435,11 @@ impl ApplicationDiffer {
                         if func.get("name").and_then(|n| n.as_str()) == Some(fn_name)
                             || func.as_str() == Some(fn_name)
                         {
-                            return Some(if func.is_object() { func.clone() } else { json!({"name": fn_name}) });
+                            return Some(if func.is_object() {
+                                func.clone()
+                            } else {
+                                json!({"name": fn_name})
+                            });
                         }
                     }
                 }
@@ -396,8 +508,14 @@ impl ApplicationDiffer {
                 }
 
                 // Compare type_only
-                let l_type = l.get("type_only").and_then(|t| t.as_bool()).unwrap_or(false);
-                let r_type = r.get("type_only").and_then(|t| t.as_bool()).unwrap_or(false);
+                let l_type = l
+                    .get("type_only")
+                    .and_then(|t| t.as_bool())
+                    .unwrap_or(false);
+                let r_type = r
+                    .get("type_only")
+                    .and_then(|t| t.as_bool())
+                    .unwrap_or(false);
                 if l_type != r_type {
                     differences.push(FieldDiff {
                         pointer: "/type_only".to_string(),
@@ -423,8 +541,14 @@ impl ApplicationDiffer {
                         });
                     }
 
-                    let l_async = lf.get("is_async").and_then(|a| a.as_bool()).unwrap_or(false);
-                    let r_async = rf.get("is_async").and_then(|a| a.as_bool()).unwrap_or(false);
+                    let l_async = lf
+                        .get("is_async")
+                        .and_then(|a| a.as_bool())
+                        .unwrap_or(false);
+                    let r_async = rf
+                        .get("is_async")
+                        .and_then(|a| a.as_bool())
+                        .unwrap_or(false);
                     if l_async != r_async {
                         differences.push(FieldDiff {
                             pointer: "/is_async".to_string(),
@@ -438,7 +562,11 @@ impl ApplicationDiffer {
         }
 
         let is_compatible = differences.is_empty();
-        let status = if is_compatible { "unchanged" } else { "changed" };
+        let status = if is_compatible {
+            "unchanged"
+        } else {
+            "changed"
+        };
 
         Ok(ExportShapeDiff {
             left_module: left_module.to_string(),
@@ -544,9 +672,14 @@ mod tests {
         });
 
         let diff = ApplicationDiffer::compare_export_shapes(
-            &left, "src/api.js", "getData",
-            &right, "src/api.js", "getData"
-        ).unwrap();
+            &left,
+            "src/api.js",
+            "getData",
+            &right,
+            "src/api.js",
+            "getData",
+        )
+        .unwrap();
 
         assert!(!diff.shape_compatible);
         assert_eq!(diff.status, "changed");

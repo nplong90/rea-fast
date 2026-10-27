@@ -129,7 +129,9 @@ impl SecretScanner {
 
             // 2. URLs
             for mat in URL_REGEX.find_iter(line) {
-                let url = mat.as_str().trim_end_matches(&[',', ';', ')', '}', ']'][..]);
+                let url = mat
+                    .as_str()
+                    .trim_end_matches(&[',', ';', ')', '}', ']'][..]);
                 endpoints.push(EndpointFinding {
                     url_or_path: url.to_string(),
                     kind: "absolute_url".to_string(),
@@ -194,7 +196,15 @@ mod tests {
         "#;
         let res = SecretScanner::scan_str(sample, None);
         assert_eq!(res.total_endpoints, 2);
-        assert!(res.endpoints.iter().any(|e| e.url_or_path == "https://api.example.com/v1/users"));
-        assert!(res.endpoints.iter().any(|e| e.url_or_path == "/api/v2/auth/login"));
+        assert!(
+            res.endpoints
+                .iter()
+                .any(|e| e.url_or_path == "https://api.example.com/v1/users")
+        );
+        assert!(
+            res.endpoints
+                .iter()
+                .any(|e| e.url_or_path == "/api/v2/auth/login")
+        );
     }
 }

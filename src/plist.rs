@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -42,11 +42,21 @@ fn parse_text_or_xml_plist(bytes: &[u8]) -> Result<Value, String> {
                         map.insert(key.to_string(), json!(false));
                         cursor = abs_val_tag + tag_end + 1;
                         continue;
-                    } else if let Some(close_tag) = text[abs_val_tag..].find(&format!("</{tag_name}>")) {
+                    } else if let Some(close_tag) =
+                        text[abs_val_tag..].find(&format!("</{tag_name}>"))
+                    {
                         let content = &text[abs_val_tag + tag_end + 1..abs_val_tag + close_tag];
                         let json_val = match tag_name {
-                            "integer" => content.trim().parse::<i64>().map(Value::from).unwrap_or(json!(content)),
-                            "real" => content.trim().parse::<f64>().map(Value::from).unwrap_or(json!(content)),
+                            "integer" => content
+                                .trim()
+                                .parse::<i64>()
+                                .map(Value::from)
+                                .unwrap_or(json!(content)),
+                            "real" => content
+                                .trim()
+                                .parse::<f64>()
+                                .map(Value::from)
+                                .unwrap_or(json!(content)),
                             _ => json!(content),
                         };
                         map.insert(key.to_string(), json_val);
@@ -126,7 +136,12 @@ fn read_bplist_object(
     let mut count = (marker & 0x0F) as usize;
     let mut header_len = 1;
 
-    if (obj_type == 0x4 || obj_type == 0x5 || obj_type == 0x6 || obj_type == 0xA || obj_type == 0xC || obj_type == 0xD)
+    if (obj_type == 0x4
+        || obj_type == 0x5
+        || obj_type == 0x6
+        || obj_type == 0xA
+        || obj_type == 0xC
+        || obj_type == 0xD)
         && count == 0x0F
     {
         // Extended count stored in follow-up integer object
@@ -187,7 +202,12 @@ fn read_bplist_object(
         0x6 => {
             // UTF-16 String
             let slice = &bytes[pos + header_len..pos + header_len + count * 2];
-            let u16s: Vec<u16> = slice.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+            let u16s: Vec<u16> = slice
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
             json!(String::from_utf16_lossy(&u16s))
         }
         0x8 => {
@@ -209,7 +229,13 @@ fn read_bplist_object(
                 for b in &bytes[start..start + obj_ref_size] {
                     ref_idx = (ref_idx << 8) | (*b as usize);
                 }
-                arr.push(read_bplist_object(bytes, ref_idx, offsets, obj_ref_size, visited)?);
+                arr.push(read_bplist_object(
+                    bytes,
+                    ref_idx,
+                    offsets,
+                    obj_ref_size,
+                    visited,
+                )?);
             }
             Value::Array(arr)
         }
@@ -293,7 +319,8 @@ pub fn project_apple_application_graph(args: &Value) -> Value {
 
     if let Some(items) = inventory {
         for it in items {
-            let path = it.get("path")
+            let path = it
+                .get("path")
                 .or_else(|| it.get("subject").and_then(|s| s.get("local_path")))
                 .and_then(|p| p.as_str())
                 .unwrap_or("");
@@ -345,7 +372,8 @@ pub fn project_harmony_application_graph(args: &Value) -> Value {
 
     if let Some(items) = inventory {
         for it in items {
-            let path = it.get("path")
+            let path = it
+                .get("path")
                 .or_else(|| it.get("subject").and_then(|s| s.get("local_path")))
                 .and_then(|p| p.as_str())
                 .unwrap_or("");
@@ -387,7 +415,10 @@ pub fn inspect_keyed_archive(args: &Value) -> Value {
 
     let objects = plist_val.get("$objects").and_then(|o| o.as_array());
     let top = plist_val.get("$top");
-    let archiver = plist_val.get("$archiver").and_then(|a| a.as_str()).unwrap_or("NSKeyedArchiver");
+    let archiver = plist_val
+        .get("$archiver")
+        .and_then(|a| a.as_str())
+        .unwrap_or("NSKeyedArchiver");
 
     json!({
         "status": "complete",

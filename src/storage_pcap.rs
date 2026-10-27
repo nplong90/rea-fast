@@ -1,11 +1,6 @@
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::BTreeSet,
-    error::Error,
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeSet, error::Error, fs, path::Path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SqliteTableInfo {
@@ -72,7 +67,11 @@ impl StoragePcapInspector {
         }
 
         let raw_page_size = u16::from_be_bytes(bytes[16..18].try_into()?);
-        let page_size = if raw_page_size == 1 { 65536 } else { raw_page_size as u32 };
+        let page_size = if raw_page_size == 1 {
+            65536
+        } else {
+            raw_page_size as u32
+        };
         let change_counter = u32::from_be_bytes(bytes[24..28].try_into()?);
         let schema_cookie = u32::from_be_bytes(bytes[40..44].try_into()?);
         let user_version = u32::from_be_bytes(bytes[60..64].try_into()?);
@@ -91,7 +90,9 @@ impl StoragePcapInspector {
                 if tokens.len() >= 3 {
                     let kind = tokens[1].to_lowercase();
                     if kind == "table" || kind == "index" || kind == "view" || kind == "trigger" {
-                        let raw_name = tokens[2].trim_matches(|c| c == '"' || c == '\'' || c == '`' || c == '[' || c == ']');
+                        let raw_name = tokens[2].trim_matches(|c| {
+                            c == '"' || c == '\'' || c == '`' || c == '[' || c == ']'
+                        });
                         let name = raw_name.split('(').next().unwrap_or(raw_name).to_string();
                         if !tables.iter().any(|t: &SqliteTableInfo| t.name == name) {
                             tables.push(SqliteTableInfo {
@@ -182,9 +183,16 @@ impl StoragePcapInspector {
             // Basic Ethernet frame parsing (14 bytes header)
             if pkt_data.len() >= 14 {
                 let ether_type = u16::from_be_bytes([pkt_data[12], pkt_data[13]]);
-                if ether_type == 0x0800 && pkt_data.len() >= 34 { // IPv4
-                    let src_ip = format!("{}.{}.{}.{}", pkt_data[26], pkt_data[27], pkt_data[28], pkt_data[29]);
-                    let dst_ip = format!("{}.{}.{}.{}", pkt_data[30], pkt_data[31], pkt_data[32], pkt_data[33]);
+                if ether_type == 0x0800 && pkt_data.len() >= 34 {
+                    // IPv4
+                    let src_ip = format!(
+                        "{}.{}.{}.{}",
+                        pkt_data[26], pkt_data[27], pkt_data[28], pkt_data[29]
+                    );
+                    let dst_ip = format!(
+                        "{}.{}.{}.{}",
+                        pkt_data[30], pkt_data[31], pkt_data[32], pkt_data[33]
+                    );
                     ips.insert(src_ip);
                     ips.insert(dst_ip);
 
@@ -208,10 +216,15 @@ impl StoragePcapInspector {
                                 ports.insert(dport);
                             }
                         }
-                        1 => { protos.insert("ICMP".to_string()); }
-                        _ => { protos.insert(format!("IP_proto_{}", proto_num)); }
+                        1 => {
+                            protos.insert("ICMP".to_string());
+                        }
+                        _ => {
+                            protos.insert(format!("IP_proto_{}", proto_num));
+                        }
                     }
-                } else if ether_type == 0x86dd && pkt_data.len() >= 54 { // IPv6
+                } else if ether_type == 0x86dd && pkt_data.len() >= 54 {
+                    // IPv6
                     protos.insert("IPv6".to_string());
                 } else if ether_type == 0x0806 {
                     protos.insert("ARP".to_string());

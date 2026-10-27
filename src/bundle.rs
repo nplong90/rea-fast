@@ -15,30 +15,22 @@ use std::{
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum ExtractionMode {
+    #[default]
     Structural,
     Heuristic,
     Inspection,
 }
 
-impl Default for ExtractionMode {
-    fn default() -> Self {
-        ExtractionMode::Structural
-    }
-}
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum RewriteLevel {
+    #[default]
     Minimal,
     Standard,
     Aggressive,
-}
-
-impl Default for RewriteLevel {
-    fn default() -> Self {
-        RewriteLevel::Minimal
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,9 +74,8 @@ fn sanitize_module_path(id: &str, index: usize) -> PathBuf {
 
     let mut path = PathBuf::new();
     for part in Path::new(&clean).components() {
-        match part {
-            Component::Normal(s) => path.push(s),
-            _ => {}
+        if let Component::Normal(s) = part {
+            path.push(s)
         }
     }
 
@@ -119,7 +110,9 @@ fn extract_function_body_from_element(elem: &ArrayExpressionElement<'_>) -> Opti
         ArrayExpressionElement::ParenthesizedExpression(p) => {
             extract_function_body_from_expr(&p.expression)
         }
-        _ => elem.as_expression().and_then(extract_function_body_from_expr),
+        _ => elem
+            .as_expression()
+            .and_then(extract_function_body_from_expr),
     }
 }
 
@@ -146,19 +139,18 @@ impl SourceRecoverer {
             .into());
         }
 
-        let parent = output_directory.parent().ok_or("Invalid output directory parent")?;
+        let parent = output_directory
+            .parent()
+            .ok_or("Invalid output directory parent")?;
         if !parent.exists() {
-            return Err(format!(
-                "Parent directory does not exist: {}",
-                parent.display()
-            )
-            .into());
+            return Err(format!("Parent directory does not exist: {}", parent.display()).into());
         }
 
         let source = fs::read_to_string(input_path)?;
         let original_sha256 = sha256_hex(source.as_bytes());
 
-        let (bundler, raw_modules, mut warnings) = self.detect_and_extract_modules(&source, input_path);
+        let (bundler, raw_modules, mut warnings) =
+            self.detect_and_extract_modules(&source, input_path);
 
         fs::create_dir_all(output_directory)?;
 
@@ -179,7 +171,10 @@ impl SourceRecoverer {
                 let slice = &source[start..end];
                 self.process_code(slice)
             } else {
-                warnings.push(format!("Module {} had invalid span {}..{}", raw.id, start, end));
+                warnings.push(format!(
+                    "Module {} had invalid span {}..{}",
+                    raw.id, start, end
+                ));
                 String::new()
             };
 
@@ -228,7 +223,7 @@ impl SourceRecoverer {
         // Strip outer function wrapper braces { ... } if present
         let mut s = trimmed;
         if s.starts_with('{') && s.ends_with('}') {
-            s = &s[1..s.len() - 1].trim();
+            s = s[1..s.len() - 1].trim();
         }
 
         match self.rewrite {
@@ -236,7 +231,10 @@ impl SourceRecoverer {
             RewriteLevel::Standard | RewriteLevel::Aggressive => {
                 // Strip common strict mode directives at start
                 let mut lines: Vec<&str> = s.lines().collect();
-                if lines.first().is_some_and(|l| l.trim() == "\"use strict\";" || l.trim() == "'use strict';") {
+                if lines
+                    .first()
+                    .is_some_and(|l| l.trim() == "\"use strict\";" || l.trim() == "'use strict';")
+                {
                     lines.remove(0);
                 }
                 lines.join("\n").trim().to_string()
@@ -260,24 +258,27 @@ impl SourceRecoverer {
 
         let mut warnings = Vec::new();
         if parsed.panicked || !parsed.errors.is_empty() {
-            warnings.push(format!("Parser diagnostics: {} errors", parsed.errors.len()));
+            warnings.push(format!(
+                "Parser diagnostics: {} errors",
+                parsed.errors.len()
+            ));
         }
 
         let mut modules = Vec::new();
 
         // 1. Check for Webpack Jsonp / WebpackChunk push
         for stmt in &parsed.program.body {
-            if let Statement::ExpressionStatement(expr) = stmt {
-                if let Expression::CallExpression(call) = &expr.expression {
-                    if let Some(extracted) = self.try_extract_webpack_push(call, source) {
-                        return ("webpack".to_string(), extracted, warnings);
-                    }
-                    if let Some(extracted) = self.try_extract_webpack_iife(call, source) {
-                        return ("webpack".to_string(), extracted, warnings);
-                    }
-                    if let Some(extracted) = self.try_extract_browserify(call, source) {
-                        return ("browserify".to_string(), extracted, warnings);
-                    }
+            if let Statement::ExpressionStatement(expr) = stmt
+                && let Expression::CallExpression(call) = &expr.expression
+            {
+                if let Some(extracted) = self.try_extract_webpack_push(call, source) {
+                    return ("webpack".to_string(), extracted, warnings);
+                }
+                if let Some(extracted) = self.try_extract_webpack_iife(call, source) {
+                    return ("webpack".to_string(), extracted, warnings);
+                }
+                if let Some(extracted) = self.try_extract_browserify(call, source) {
+                    return ("browserify".to_string(), extracted, warnings);
                 }
             }
         }
@@ -290,7 +291,11 @@ impl SourceRecoverer {
 
         // 3. Fallback: single module
         modules.push(RawModule {
-            id: path.file_name().and_then(|s| s.to_str()).unwrap_or("index.js").to_string(),
+            id: path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("index.js")
+                .to_string(),
             body_span: Span::new(0, source.len() as u32),
         });
 
@@ -422,15 +427,15 @@ impl SourceRecoverer {
                 };
 
                 // Browserify value is an array: [function, deps_map]
-                if let Expression::ArrayExpression(arr) = &p.value {
-                    if let Some(first_elem) = arr.elements.first() {
-                        let body_span = extract_function_body_from_element(first_elem)?;
+                if let Expression::ArrayExpression(arr) = &p.value
+                    && let Some(first_elem) = arr.elements.first()
+                {
+                    let body_span = extract_function_body_from_element(first_elem)?;
 
-                        raw_modules.push(RawModule {
-                            id: key_name,
-                            body_span,
-                        });
-                    }
+                    raw_modules.push(RawModule {
+                        id: key_name,
+                        body_span,
+                    });
                 }
             }
         }
@@ -451,36 +456,38 @@ impl SourceRecoverer {
         for stmt in &program.body {
             if let Some(Declaration::VariableDeclaration(var_decl)) = stmt.as_declaration() {
                 for var in &var_decl.declarations {
-                        if let Some(init) = &var.init {
-                            if let Expression::CallExpression(call) = init {
-                                if let Expression::Identifier(id) = &call.callee {
-                                    if id.name == "__commonJS" {
-                                        let name = var.id.get_binding_identifiers()
-                                            .into_iter()
-                                            .next()
-                                            .map(|b| b.name.to_string())
-                                            .unwrap_or_else(|| "commonjs_mod".to_string());
+                    if let Some(init) = &var.init
+                        && let Expression::CallExpression(call) = init
+                        && let Expression::Identifier(id) = &call.callee
+                        && id.name == "__commonJS"
+                    {
+                        let name = var
+                            .id
+                            .get_binding_identifiers()
+                            .into_iter()
+                            .next()
+                            .map(|b| b.name.to_string())
+                            .unwrap_or_else(|| "commonjs_mod".to_string());
 
-                                        if let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) {
-                                            let body_span = match arg {
-                                                Expression::FunctionExpression(f) => f.body.as_ref().map(|b| b.span),
-                                                Expression::ArrowFunctionExpression(f) => Some(f.body.span),
-                                                _ => None,
-                                            };
-                                            if let Some(span) = body_span {
-                                                raw_modules.push(RawModule {
-                                                    id: name,
-                                                    body_span: span,
-                                                });
-                                            }
-                                        }
-                                    }
+                        if let Some(arg) = call.arguments.first().and_then(|a| a.as_expression()) {
+                            let body_span = match arg {
+                                Expression::FunctionExpression(f) => {
+                                    f.body.as_ref().map(|b| b.span)
                                 }
+                                Expression::ArrowFunctionExpression(f) => Some(f.body.span),
+                                _ => None,
+                            };
+                            if let Some(span) = body_span {
+                                raw_modules.push(RawModule {
+                                    id: name,
+                                    body_span: span,
+                                });
                             }
                         }
                     }
                 }
             }
+        }
         raw_modules
     }
 }

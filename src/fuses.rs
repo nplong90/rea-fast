@@ -85,7 +85,14 @@ fn detect_format(header: &[u8]) -> Option<BinaryFormat> {
     let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
     if matches!(
         magic,
-        0xfeedface | 0xfeedfacf | 0xcefaedfe | 0xcffaedfe | 0xcafebabe | 0xcafebabf | 0xbebafeca | 0xbfbafeca
+        0xfeedface
+            | 0xfeedfacf
+            | 0xcefaedfe
+            | 0xcffaedfe
+            | 0xcafebabe
+            | 0xcafebabf
+            | 0xbebafeca
+            | 0xbfbafeca
     ) {
         return Some(BinaryFormat::MachO);
     }
@@ -109,7 +116,10 @@ pub fn resolve_electron_binary(path: &Path) -> Result<PathBuf, io::Error> {
             }
         }
     }
-    Err(io::Error::new(io::ErrorKind::NotFound, "No Electron binary found at path"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "No Electron binary found at path",
+    ))
 }
 
 pub fn inspect_fuses(path: &Path) -> Result<FuseReport, Box<dyn std::error::Error>> {
@@ -196,7 +206,12 @@ pub fn inspect_fuses(path: &Path) -> Result<FuseReport, Box<dyn std::error::Erro
             })
             .collect();
 
-        let state_at = |idx: usize| fuses.get(idx).map(|f| f.state).unwrap_or(FuseState::Unknown);
+        let state_at = |idx: usize| {
+            fuses
+                .get(idx)
+                .map(|f| f.state)
+                .unwrap_or(FuseState::Unknown)
+        };
 
         let node_cli = match state_at(3) {
             FuseState::Enabled => "honored",
@@ -259,21 +274,34 @@ mod tests {
         let temp = std::env::temp_dir().join("test_elf_fuses");
         let mut f = File::create(&temp).unwrap();
         // ELF header prefix
-        f.write_all(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();
+        f.write_all(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+            .unwrap();
         f.write_all(&[0u8; 1024]).unwrap();
         f.write_all(SENTINEL).unwrap();
         f.write_all(&[1u8, 9u8]).unwrap(); // version 1, length 9
-        f.write_all(&[0x31, 0x31, 0x31, 0x30, 0x31, 0x31, 0x31, 0x31, 0x31]).unwrap(); // fuse 3 disabled (0x30)
+        f.write_all(&[0x31, 0x31, 0x31, 0x30, 0x31, 0x31, 0x31, 0x31, 0x31])
+            .unwrap(); // fuse 3 disabled (0x30)
         drop(f);
 
         let report = inspect_fuses(&temp).unwrap();
         assert_eq!(report.format, BinaryFormat::Elf);
         assert_eq!(report.slices.len(), 1);
         assert_eq!(report.slices[0].fuses.len(), 9);
-        assert_eq!(report.slices[0].fuses[3].name, "EnableNodeCliInspectArguments");
+        assert_eq!(
+            report.slices[0].fuses[3].name,
+            "EnableNodeCliInspectArguments"
+        );
         assert_eq!(report.slices[0].fuses[3].state, FuseState::Disabled);
-        assert_eq!(report.slices[0].implications.node_cli_inspect_arguments, "not_honored");
-        assert_eq!(report.slices[0].implications.embedded_asar_integrity_validation, "unknown");
+        assert_eq!(
+            report.slices[0].implications.node_cli_inspect_arguments,
+            "not_honored"
+        );
+        assert_eq!(
+            report.slices[0]
+                .implications
+                .embedded_asar_integrity_validation,
+            "unknown"
+        );
 
         let _ = std::fs::remove_file(temp);
     }

@@ -18,7 +18,7 @@ use crate::{
 use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     error::Error,
     io::{self, BufRead, Write},
@@ -118,10 +118,7 @@ pub fn analyze_application_files(
     Ok(results)
 }
 
-pub fn analyze_application(
-    input: &Path,
-    max_file_bytes: u64,
-) -> Result<Value, Box<dyn Error>> {
+pub fn analyze_application(input: &Path, max_file_bytes: u64) -> Result<Value, Box<dyn Error>> {
     let results = analyze_application_files(input, max_file_bytes)?;
     let deps = graph::dependencies(&results);
     let mut out = Vec::new();
@@ -149,13 +146,21 @@ fn resolve_graph_value(val: &Value) -> Result<Value, String> {
         if let Some(raw) = obj.get("raw_result") {
             return resolve_graph_value(raw);
         }
-        if let Some(p) = obj.get("input_path").or_else(|| obj.get("path")).and_then(|v| v.as_str()) {
+        if let Some(p) = obj
+            .get("input_path")
+            .or_else(|| obj.get("path"))
+            .and_then(|v| v.as_str())
+        {
             let path = Path::new(p);
             if path.exists() {
                 return analyze_application(path, 16_777_216).map_err(|e| e.to_string());
             }
         }
-        if let Some(subj) = obj.get("subject").and_then(|s| s.get("local_path")).and_then(|v| v.as_str()) {
+        if let Some(subj) = obj
+            .get("subject")
+            .and_then(|s| s.get("local_path"))
+            .and_then(|v| v.as_str())
+        {
             let path = Path::new(subj);
             if path.exists() {
                 return analyze_application(path, 16_777_216).map_err(|e| e.to_string());
@@ -175,13 +180,21 @@ fn resolve_input_path(val: &Value) -> Option<PathBuf> {
             return resolve_input_path(&parsed);
         }
     } else if let Some(obj) = val.as_object() {
-        if let Some(p) = obj.get("input_path").or_else(|| obj.get("path")).and_then(|v| v.as_str()) {
+        if let Some(p) = obj
+            .get("input_path")
+            .or_else(|| obj.get("path"))
+            .and_then(|v| v.as_str())
+        {
             let path = Path::new(p);
             if path.exists() {
                 return Some(path.to_path_buf());
             }
         }
-        if let Some(subj) = obj.get("subject").and_then(|s| s.get("local_path")).and_then(|v| v.as_str()) {
+        if let Some(subj) = obj
+            .get("subject")
+            .and_then(|s| s.get("local_path"))
+            .and_then(|v| v.as_str())
+        {
             let path = Path::new(subj);
             if path.exists() {
                 return Some(path.to_path_buf());
@@ -197,32 +210,41 @@ fn resolve_input_path(val: &Value) -> Option<PathBuf> {
     None
 }
 
-pub fn build_application_semantic_graph(input: &Path) -> Result<semantics::SemanticGraph, Box<dyn Error>> {
+pub fn build_application_semantic_graph(
+    input: &Path,
+) -> Result<semantics::SemanticGraph, Box<dyn Error>> {
     let input = input.canonicalize()?;
     let mut combined = semantics::SemanticGraph::default();
     if is_asar(&input) {
         let archive = AsarArchive::open(&input)?;
         for entry in &archive.entries {
-            if supported(Path::new(&entry.path)) && !entry.unpacked {
-                if let Ok(bytes) = archive.read_file(entry) {
-                    if let Ok(source) = std::str::from_utf8(&bytes) {
-                        let g = semantics::build_semantic_graph(source, &entry.path);
-                        combined.nodes.extend(g.nodes);
-                        combined.edges.extend(g.edges);
-                    }
-                }
+            if supported(Path::new(&entry.path))
+                && !entry.unpacked
+                && let Ok(bytes) = archive.read_file(entry)
+                && let Ok(source) = std::str::from_utf8(&bytes)
+            {
+                let g = semantics::build_semantic_graph(source, &entry.path);
+                combined.nodes.extend(g.nodes);
+                combined.edges.extend(g.edges);
             }
         }
     } else if input.is_file() {
         let source = std::fs::read_to_string(&input)?;
-        let name = input.file_name().and_then(|s| s.to_str()).unwrap_or("file.js");
+        let name = input
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("file.js");
         combined = semantics::build_semantic_graph(&source, name);
     } else {
         let root = &input;
         let files = collect_files(&input)?;
         for path in files {
             if let Ok(source) = std::fs::read_to_string(&path) {
-                let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().to_string();
+                let rel = path
+                    .strip_prefix(root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .to_string();
                 let g = semantics::build_semantic_graph(&source, &rel);
                 combined.nodes.extend(g.nodes);
                 combined.edges.extend(g.edges);
@@ -256,7 +278,8 @@ struct ToolResult {
     is_error: bool,
 }
 
-static ACTIVE_PROFILE_FULL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static ACTIVE_PROFILE_FULL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_profile_full(full: bool) {
     ACTIVE_PROFILE_FULL.store(full, std::sync::atomic::Ordering::Relaxed);
@@ -299,11 +322,22 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("name"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'tool_name' argument".to_string())?;
+            // A meta-tool must never invoke itself: doing so recurses until the
+            // MCP server exhausts its stack, taking down all active clients.
+            if target_name == "rea_execute_tool" {
+                return Err("rea_execute_tool cannot invoke itself".to_string());
+            }
+            if !crate::catalog::has_tool(target_name) {
+                return Err(format!("Unknown tool: {target_name}"));
+            }
             let empty = json!({});
             let target_args = args
                 .get("arguments")
                 .or_else(|| args.get("args"))
                 .unwrap_or(&empty);
+            if !target_args.is_object() {
+                return Err("'arguments' must be an object".to_string());
+            }
             handle_tool_call(target_name, target_args)
         }
         "inspect_electron_fuses" => {
@@ -378,12 +412,16 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("input_path"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' or 'archive_path' argument".to_string())?;
-            let out_dir = args.get("output_directory").and_then(|v| v.as_str()).map(Path::new);
+            let out_dir = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .map(Path::new);
             let policy = match args.get("integrity_policy").and_then(|v| v.as_str()) {
                 Some("record-and-continue") => IntegrityPolicy::RecordAndContinue,
                 _ => IntegrityPolicy::Fail,
             };
-            let res = asar::extract_artifact(Path::new(path_str), out_dir, policy).map_err(|e| e.to_string())?;
+            let res = asar::extract_artifact(Path::new(path_str), out_dir, policy)
+                .map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "recover_javascript_sources" => {
@@ -411,11 +449,13 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "compare_application_versions" | "diff_applications" => {
-            let left_val = args.get("left")
+            let left_val = args
+                .get("left")
                 .or_else(|| args.get("left_path"))
                 .or_else(|| args.get("source"))
                 .ok_or_else(|| "Missing 'left' argument".to_string())?;
-            let right_val = args.get("right")
+            let right_val = args
+                .get("right")
                 .or_else(|| args.get("right_path"))
                 .or_else(|| args.get("target"))
                 .ok_or_else(|| "Missing 'right' argument".to_string())?;
@@ -425,11 +465,13 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(diff).map_err(|e| e.to_string())
         }
         "compare_source_to_bundle" => {
-            let ref_val = args.get("reference")
+            let ref_val = args
+                .get("reference")
                 .or_else(|| args.get("left"))
                 .or_else(|| args.get("source"))
                 .ok_or_else(|| "Missing 'reference' argument".to_string())?;
-            let app_val = args.get("application")
+            let app_val = args
+                .get("application")
                 .or_else(|| args.get("right"))
                 .or_else(|| args.get("bundle"))
                 .ok_or_else(|| "Missing 'application' argument".to_string())?;
@@ -439,7 +481,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(diff).map_err(|e| e.to_string())
         }
         "compare_javascript_export_shapes" => {
-            let left_val = args.get("left").ok_or_else(|| "Missing 'left' argument".to_string())?;
+            let left_val = args
+                .get("left")
+                .ok_or_else(|| "Missing 'left' argument".to_string())?;
             let left_mod = args
                 .get("left_module_path")
                 .and_then(|v| v.as_str())
@@ -448,7 +492,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("left_export_name")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'left_export_name' argument".to_string())?;
-            let right_val = args.get("right").ok_or_else(|| "Missing 'right' argument".to_string())?;
+            let right_val = args
+                .get("right")
+                .ok_or_else(|| "Missing 'right' argument".to_string())?;
             let right_mod = args
                 .get("right_module_path")
                 .and_then(|v| v.as_str())
@@ -465,17 +511,20 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(diff).map_err(|e| e.to_string())
         }
         "trace_application_feature" | "trace_feature" => {
-            let app_val = args.get("application")
+            let app_val = args
+                .get("application")
                 .or_else(|| args.get("app"))
                 .ok_or_else(|| "Missing 'application' argument".to_string())?;
-            let seed: FeatureSeed = serde_json::from_value(args.get("seed").cloned().unwrap_or(Value::Null))
-                .map_err(|e| format!("Invalid 'seed' argument: {e}"))?;
+            let seed: FeatureSeed =
+                serde_json::from_value(args.get("seed").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("Invalid 'seed' argument: {e}"))?;
             let direction = match args.get("direction").and_then(|v| v.as_str()) {
                 Some("incoming") => TraceDirection::Incoming,
                 Some("outgoing") => TraceDirection::Outgoing,
                 _ => TraceDirection::Both,
             };
-            let path = resolve_input_path(app_val).ok_or_else(|| "Unable to resolve application path".to_string())?;
+            let path = resolve_input_path(app_val)
+                .ok_or_else(|| "Unable to resolve application path".to_string())?;
             let files = analyze_application_files(&path, 16_777_216).map_err(|e| e.to_string())?;
             let deps = graph::dependencies(&files);
             let tracer = ApplicationFeatureTracer::new(&files, &deps, None);
@@ -483,10 +532,15 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "trace_javascript_semantics" => {
-            let app_val = args.get("application").ok_or_else(|| "Missing 'application' argument".to_string())?;
-            let query: SemanticQuery = serde_json::from_value(args.get("query").cloned().unwrap_or(Value::Null))
-                .map_err(|e| format!("Invalid 'query' argument: {e}"))?;
-            let graph = if let Ok(g) = serde_json::from_value::<semantics::SemanticGraph>(app_val.clone()) {
+            let app_val = args
+                .get("application")
+                .ok_or_else(|| "Missing 'application' argument".to_string())?;
+            let query: SemanticQuery =
+                serde_json::from_value(args.get("query").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("Invalid 'query' argument: {e}"))?;
+            let graph = if let Ok(g) =
+                serde_json::from_value::<semantics::SemanticGraph>(app_val.clone())
+            {
                 if !g.nodes.is_empty() {
                     g
                 } else if let Some(p) = resolve_input_path(app_val) {
@@ -527,8 +581,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("output_directory")
                 .and_then(|v| v.as_str())
                 .map(Path::new);
-            let res = AuditPipeline::run(Path::new(target_str), out_dir)
-                .map_err(|e| e.to_string())?;
+            let res =
+                AuditPipeline::run(Path::new(target_str), out_dir).map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "pack_asar" => {
@@ -600,8 +654,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_layout(Path::new(path_str))
-                .map_err(|e| e.to_string())?;
+            let res =
+                NativeInspector::inspect_layout(Path::new(path_str)).map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "inspect_go_binary" => {
@@ -609,8 +663,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_go(Path::new(path_str))
-                .map_err(|e| e.to_string())?;
+            let res =
+                NativeInspector::inspect_go(Path::new(path_str)).map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "inspect_rust_binary" => {
@@ -618,8 +672,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_rust(Path::new(path_str))
-                .map_err(|e| e.to_string())?;
+            let res =
+                NativeInspector::inspect_rust(Path::new(path_str)).map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "inspect_wasm_artifact" => {
@@ -636,8 +690,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = MobileInspector::inspect_apk(Path::new(path_str))
-                .map_err(|e| e.to_string())?;
+            let res =
+                MobileInspector::inspect_apk(Path::new(path_str)).map_err(|e| e.to_string())?;
             serde_json::to_value(res).map_err(|e| e.to_string())
         }
         "inspect_sqlite_database" => {
@@ -664,7 +718,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("artifact_path"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_artifact(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_artifact(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_macho" => {
@@ -672,7 +727,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_macho(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res =
+                NativeInspector::inspect_macho(Path::new(path_str)).map_err(|e| e.to_string())?;
             Ok(res)
         }
         "list_architectures" => {
@@ -680,7 +736,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::list_architectures(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::list_architectures(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_native_exports" => {
@@ -688,7 +745,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_native_exports(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_native_exports(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_byte_entropy" => {
@@ -697,24 +755,37 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
             let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
-            let chunk_size = args.get("chunk_size").and_then(|v| v.as_u64()).unwrap_or(4096) as usize;
+            let chunk_size = args
+                .get("chunk_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(4096) as usize;
             Ok(NativeInspector::inspect_byte_entropy(&bytes, chunk_size))
         }
         "compare_wasm_interfaces" => {
-            let left_path = args.get("left_path").or_else(|| args.get("left")).and_then(|v| v.as_str())
+            let left_path = args
+                .get("left_path")
+                .or_else(|| args.get("left"))
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'left_path' argument".to_string())?;
-            let right_path = args.get("right_path").or_else(|| args.get("right")).and_then(|v| v.as_str())
+            let right_path = args
+                .get("right_path")
+                .or_else(|| args.get("right"))
+                .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'right_path' argument".to_string())?;
             let left_bytes = std::fs::read(left_path).map_err(|e| e.to_string())?;
             let right_bytes = std::fs::read(right_path).map_err(|e| e.to_string())?;
-            Ok(NativeInspector::compare_wasm_interfaces(&left_bytes, &right_bytes))
+            Ok(NativeInspector::compare_wasm_interfaces(
+                &left_bytes,
+                &right_bytes,
+            ))
         }
         "inspect_il2cpp_metadata" => {
             let path_str = args
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_il2cpp_metadata(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_il2cpp_metadata(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "identify_flutter_build" => {
@@ -722,7 +793,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = MobileInspector::identify_flutter_build(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = MobileInspector::identify_flutter_build(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_apk_signature" => {
@@ -730,7 +802,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = MobileInspector::inspect_apk_signature(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = MobileInspector::inspect_apk_signature(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "project_android_application_graph" => {
@@ -739,7 +812,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("apk_path"))
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' or 'apk_path' argument".to_string())?;
-            let res = MobileInspector::project_android_application_graph(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = MobileInspector::project_android_application_graph(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "trace_dylib_resolution" => {
@@ -747,7 +821,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let layout = NativeInspector::inspect_layout(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let layout =
+                NativeInspector::inspect_layout(Path::new(path_str)).map_err(|e| e.to_string())?;
             Ok(json!({
                 "path": path_str,
                 "format": layout.format,
@@ -762,11 +837,16 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
             let path = Path::new(path_str);
             if path_str.ends_with(".apk") {
-                let res = MobileInspector::inspect_apk_signature(path).map_err(|e| e.to_string())?;
+                let res =
+                    MobileInspector::inspect_apk_signature(path).map_err(|e| e.to_string())?;
                 Ok(res)
             } else {
                 let layout = NativeInspector::inspect_layout(path).map_err(|e| e.to_string())?;
-                let has_code_sig = layout.sections.iter().any(|s| s.name.contains("signature") || s.name.contains("SECURITY") || s.name.contains("certificate"));
+                let has_code_sig = layout.sections.iter().any(|s| {
+                    s.name.contains("signature")
+                        || s.name.contains("SECURITY")
+                        || s.name.contains("certificate")
+                });
                 Ok(json!({
                     "path": path_str,
                     "format": layout.format,
@@ -784,7 +864,10 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 let bytes = std::fs::read(path_str).map_err(|e| e.to_string())?;
                 let min_len = args.get("min_length").and_then(|v| v.as_u64()).unwrap_or(4) as usize;
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
-                let query = args.get("query").or_else(|| args.get("filter")).and_then(|v| v.as_str());
+                let query = args
+                    .get("query")
+                    .or_else(|| args.get("filter"))
+                    .and_then(|v| v.as_str());
                 let mut strings = NativeInspector::list_strings(&bytes, min_len, 5000);
                 if let Some(q) = query {
                     let q_lower = q.to_lowercase();
@@ -805,7 +888,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
         "list_segments" => {
             let path_str = args.get("path").and_then(|v| v.as_str());
             if let Some(path_str) = path_str {
-                let sections = NativeInspector::list_sections(Path::new(path_str)).map_err(|e| e.to_string())?;
+                let sections = NativeInspector::list_sections(Path::new(path_str))
+                    .map_err(|e| e.to_string())?;
                 Ok(json!({
                     "path": path_str,
                     "total_segments": sections.len(),
@@ -819,7 +903,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             let path_str = args.get("path").and_then(|v| v.as_str());
             if let Some(path_str) = path_str {
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(200) as usize;
-                let symbols = NativeInspector::list_symbols(Path::new(path_str), limit).map_err(|e| e.to_string())?;
+                let symbols = NativeInspector::list_symbols(Path::new(path_str), limit)
+                    .map_err(|e| e.to_string())?;
                 Ok(json!({
                     "path": path_str,
                     "total_symbols": symbols.len(),
@@ -834,7 +919,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_model_artifact(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_model_artifact(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_desktop_application" => {
@@ -842,7 +928,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_desktop_application(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_desktop_application(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
         "inspect_python_pyc" => {
@@ -850,15 +937,23 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .get("path")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
-            let res = NativeInspector::inspect_python_pyc(Path::new(path_str)).map_err(|e| e.to_string())?;
+            let res = NativeInspector::inspect_python_pyc(Path::new(path_str))
+                .map_err(|e| e.to_string())?;
             Ok(res)
         }
-        "export_environment_bundle" => {
-            Ok(NativeInspector::export_environment_bundle())
-        }
+        "export_environment_bundle" => Ok(NativeInspector::export_environment_bundle()),
         "demangle_swift" => {
-            let sym = args.get("symbol").or_else(|| args.get("name")).and_then(|v| v.as_str()).unwrap_or("");
-            let out = DynamicBridge::run_optional_bridge("swift-demangle", "swift-demangle or xcode-select", &[sym], 5);
+            let sym = args
+                .get("symbol")
+                .or_else(|| args.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let out = DynamicBridge::run_optional_bridge(
+                "swift-demangle",
+                "swift-demangle or xcode-select",
+                &[sym],
+                5,
+            );
             if out["status"] == "success" {
                 Ok(out)
             } else {
@@ -884,7 +979,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .or_else(|| args.get("endpoint"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("http://127.0.0.1:9222");
-            let targets = DynamicBridge::list_electron_targets(endpoint).map_err(|e| e.to_string())?;
+            let targets =
+                DynamicBridge::list_electron_targets(endpoint).map_err(|e| e.to_string())?;
             serde_json::to_value(targets).map_err(|e| e.to_string())
         }
         "list_adb_devices" => {
@@ -901,9 +997,14 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             let third_party = args
                 .get("third_party_only")
                 .and_then(|v| v.as_bool())
-                .or_else(|| args.get("scope").and_then(|v| v.as_str()).map(|s| s == "third_party"))
+                .or_else(|| {
+                    args.get("scope")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s == "third_party")
+                })
                 .unwrap_or(false);
-            let pkgs = DynamicBridge::list_adb_packages(serial, third_party).map_err(|e| e.to_string())?;
+            let pkgs =
+                DynamicBridge::list_adb_packages(serial, third_party).map_err(|e| e.to_string())?;
             serde_json::to_value(pkgs).map_err(|e| e.to_string())
         }
         "list_live_processes" => {
@@ -961,8 +1062,12 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
         "inspect_analysis_view" => Ok(crate::evidence::inspect_analysis_view(args)),
         "compare_artifacts" => Ok(crate::evidence::compare_artifacts(args)),
         "compare_bundles" => Ok(crate::evidence::compare_bundles(args)),
-        "build_reconstruction_obligation_ledger" => Ok(crate::evidence::build_reconstruction_obligation_ledger(args)),
-        "evaluate_reconstruction_coverage" => Ok(crate::evidence::evaluate_reconstruction_coverage(args)),
+        "build_reconstruction_obligation_ledger" => Ok(
+            crate::evidence::build_reconstruction_obligation_ledger(args),
+        ),
+        "evaluate_reconstruction_coverage" => {
+            Ok(crate::evidence::evaluate_reconstruction_coverage(args))
+        }
         "verify_reconstruction" => Ok(crate::evidence::verify_reconstruction(args)),
         "build_call_path" => Ok(crate::evidence::build_call_path(args)),
         "compare_functions" => Ok(crate::evidence::compare_functions(args)),
@@ -970,18 +1075,28 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
 
         // Property Lists, Apple & Harmony Graphs (src/plist.rs)
         "inspect_plist" => Ok(crate::plist::inspect_plist(args)),
-        "project_apple_application_graph" => Ok(crate::plist::project_apple_application_graph(args)),
-        "project_harmony_application_graph" => Ok(crate::plist::project_harmony_application_graph(args)),
+        "project_apple_application_graph" => {
+            Ok(crate::plist::project_apple_application_graph(args))
+        }
+        "project_harmony_application_graph" => {
+            Ok(crate::plist::project_harmony_application_graph(args))
+        }
         "inspect_keyed_archive" => Ok(crate::plist::inspect_keyed_archive(args)),
         "decode_interface_builder" => Ok(crate::plist::decode_interface_builder(args)),
 
         // ECMA-335 .NET Managed & IL2CPP (src/managed.rs)
         "inspect_managed_artifact" => Ok(crate::managed::inspect_managed_artifact(args)),
         "inspect_managed_members" => Ok(crate::managed::inspect_managed_members(args)),
-        "inspect_managed_native_boundaries" => Ok(crate::managed::inspect_managed_native_boundaries(args)),
-        "verify_managed_native_boundaries" => Ok(crate::managed::verify_managed_native_boundaries(args)),
+        "inspect_managed_native_boundaries" => {
+            Ok(crate::managed::inspect_managed_native_boundaries(args))
+        }
+        "verify_managed_native_boundaries" => {
+            Ok(crate::managed::verify_managed_native_boundaries(args))
+        }
         "compare_managed_members" => Ok(crate::managed::compare_managed_members(args)),
-        "project_managed_application_graph" => Ok(crate::managed::project_managed_application_graph(args)),
+        "project_managed_application_graph" => {
+            Ok(crate::managed::project_managed_application_graph(args))
+        }
         "import_managed_reconstruction" => Ok(crate::managed::import_managed_reconstruction(args)),
 
         // Stateful Debugger Sessions: GDB, Rizin, Frida (src/session_manager.rs)
@@ -991,7 +1106,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
         "close_gdb_session" => Ok(crate::session_manager::close_gdb_session(args)),
         "start_rizin_debug_session" => Ok(crate::session_manager::start_rizin_debug_session(args)),
         "rizin_debug_command" => Ok(crate::session_manager::rizin_debug_command(args)),
-        "rizin_debug_session_status" => Ok(crate::session_manager::rizin_debug_session_status(args)),
+        "rizin_debug_session_status" => {
+            Ok(crate::session_manager::rizin_debug_session_status(args))
+        }
         "close_rizin_debug_session" => Ok(crate::session_manager::close_rizin_debug_session(args)),
         "start_frida_session" => Ok(crate::session_manager::start_frida_session(args)),
         "frida_session_status" => Ok(crate::session_manager::frida_session_status(args)),
@@ -1096,24 +1213,51 @@ fn handle_adb_tool(name: &str, args: &Value) -> Result<Value, String> {
             adb_args.extend(["shell".to_string(), "ps".to_string(), "-A".to_string()]);
         }
         "list_adb_features" => {
-            adb_args.extend(["shell".to_string(), "pm".to_string(), "list".to_string(), "features".to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "pm".to_string(),
+                "list".to_string(),
+                "features".to_string(),
+            ]);
         }
         "list_adb_services" => {
-            adb_args.extend(["shell".to_string(), "service".to_string(), "list".to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "service".to_string(),
+                "list".to_string(),
+            ]);
         }
         "list_adb_directory" => {
-            let path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("/");
-            adb_args.extend(["shell".to_string(), "ls".to_string(), "-la".to_string(), path.to_string()]);
+            let path = args
+                .get("device_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("/");
+            adb_args.extend([
+                "shell".to_string(),
+                "ls".to_string(),
+                "-la".to_string(),
+                path.to_string(),
+            ]);
         }
         "inspect_adb_package" => {
             let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "dumpsys".to_string(), "package".to_string(), pkg.to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "dumpsys".to_string(),
+                "package".to_string(),
+                pkg.to_string(),
+            ]);
         }
         "inspect_adb_display" => {
             adb_args.extend(["shell".to_string(), "wm".to_string(), "size".to_string()]);
         }
         "inspect_adb_window" => {
-            adb_args.extend(["shell".to_string(), "dumpsys".to_string(), "window".to_string(), "windows".to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "dumpsys".to_string(),
+                "window".to_string(),
+                "windows".to_string(),
+            ]);
         }
         "read_adb_logcat" => {
             adb_args.extend(["logcat".to_string(), "-d".to_string(), "-t".to_string()]);
@@ -1121,42 +1265,103 @@ fn handle_adb_tool(name: &str, args: &Value) -> Result<Value, String> {
             adb_args.push(lines.to_string());
         }
         "read_adb_setting" => {
-            let ns = args.get("namespace").and_then(|v| v.as_str()).unwrap_or("system");
+            let ns = args
+                .get("namespace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("system");
             let key = args.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "settings".to_string(), "get".to_string(), ns.to_string(), key.to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "settings".to_string(),
+                "get".to_string(),
+                ns.to_string(),
+                key.to_string(),
+            ]);
         }
         "resolve_adb_packages" => {
             let q = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "pm".to_string(), "list".to_string(), "packages".to_string(), q.to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "pm".to_string(),
+                "list".to_string(),
+                "packages".to_string(),
+                q.to_string(),
+            ]);
         }
         "pull_adb_file" => {
-            let dev_path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("");
-            let out_dir = args.get("output_directory").and_then(|v| v.as_str()).unwrap_or(".");
-            adb_args.extend(["pull".to_string(), dev_path.to_string(), out_dir.to_string()]);
+            let dev_path = args
+                .get("device_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let out_dir = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
+            adb_args.extend([
+                "pull".to_string(),
+                dev_path.to_string(),
+                out_dir.to_string(),
+            ]);
         }
         "push_adb_file" => {
-            let local_path = args.get("local_path").and_then(|v| v.as_str()).unwrap_or("");
-            let dev_path = args.get("device_path").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["push".to_string(), local_path.to_string(), dev_path.to_string()]);
+            let local_path = args
+                .get("local_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let dev_path = args
+                .get("device_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            adb_args.extend([
+                "push".to_string(),
+                local_path.to_string(),
+                dev_path.to_string(),
+            ]);
         }
         "start_adb_activity" => {
-            let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("android.intent.action.VIEW");
-            adb_args.extend(["shell".to_string(), "am".to_string(), "start".to_string(), "-W".to_string(), "-a".to_string(), action.to_string()]);
+            let action = args
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("android.intent.action.VIEW");
+            adb_args.extend([
+                "shell".to_string(),
+                "am".to_string(),
+                "start".to_string(),
+                "-W".to_string(),
+                "-a".to_string(),
+                action.to_string(),
+            ]);
             if let Some(uri) = args.get("data_uri").and_then(|v| v.as_str()) {
                 adb_args.extend(["-d".to_string(), uri.to_string()]);
             }
         }
         "start_adb_app" => {
             let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "monkey".to_string(), "-p".to_string(), pkg.to_string(), "-c".to_string(), "android.intent.category.LAUNCHER".to_string(), "1".to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "monkey".to_string(),
+                "-p".to_string(),
+                pkg.to_string(),
+                "-c".to_string(),
+                "android.intent.category.LAUNCHER".to_string(),
+                "1".to_string(),
+            ]);
         }
         "stop_adb_app" => {
             let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "am".to_string(), "force-stop".to_string(), pkg.to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "am".to_string(),
+                "force-stop".to_string(),
+                pkg.to_string(),
+            ]);
         }
         "install_adb_package" => {
             let apk = args.get("apk_path").and_then(|v| v.as_str()).unwrap_or("");
-            let replace = args.get("replace").and_then(|v| v.as_bool()).unwrap_or(true);
+            let replace = args
+                .get("replace")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             if replace {
                 adb_args.extend(["install".to_string(), "-r".to_string(), apk.to_string()]);
             } else {
@@ -1168,18 +1373,30 @@ fn handle_adb_tool(name: &str, args: &Value) -> Result<Value, String> {
             adb_args.extend(["uninstall".to_string(), pkg.to_string()]);
         }
         "collect_adb_bugreport" => {
-            let out_dir = args.get("output_directory").and_then(|v| v.as_str()).unwrap_or(".");
+            let out_dir = args
+                .get("output_directory")
+                .and_then(|v| v.as_str())
+                .unwrap_or(".");
             adb_args.extend(["bugreport".to_string(), out_dir.to_string()]);
         }
         "capture_adb_screen" => {
-            adb_args.extend(["exec-out".to_string(), "screencap".to_string(), "-p".to_string()]);
+            adb_args.extend([
+                "exec-out".to_string(),
+                "screencap".to_string(),
+                "-p".to_string(),
+            ]);
         }
         "inspect_adb_client" => {
             adb_args.push("version".to_string());
         }
         "pull_adb_package" => {
             let pkg = args.get("package").and_then(|v| v.as_str()).unwrap_or("");
-            adb_args.extend(["shell".to_string(), "pm".to_string(), "path".to_string(), pkg.to_string()]);
+            adb_args.extend([
+                "shell".to_string(),
+                "pm".to_string(),
+                "path".to_string(),
+                pkg.to_string(),
+            ]);
         }
         _ => {
             return Ok(crate::tcp_driver::unavailable_engine_response(
@@ -1289,7 +1506,10 @@ fn dispatch_extended_tool(name: &str, args: &Value) -> Result<Value, String> {
 
 fn extract_objdump_args(args: &Value) -> Vec<String> {
     if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
-        return arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
+        return arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
     }
     let mut result = Vec::new();
     if let Some(op) = args.get("operation").and_then(|v| v.as_str()) {
@@ -1319,8 +1539,14 @@ fn extract_objdump_args(args: &Value) -> Vec<String> {
 
 fn extract_args_list(args: &Value) -> Vec<String> {
     if let Some(arr) = args.get("args").and_then(|v| v.as_array()) {
-        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-    } else if let Some(s) = args.get("command").or_else(|| args.get("path")).and_then(|v| v.as_str()) {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    } else if let Some(s) = args
+        .get("command")
+        .or_else(|| args.get("path"))
+        .and_then(|v| v.as_str())
+    {
         vec![s.to_string()]
     } else {
         Vec::new()
@@ -1459,11 +1685,37 @@ mod tests {
     use super::*;
 
     #[test]
+    fn meta_tool_refuses_recursive_calls_without_crashing_server() {
+        let result = handle_tool_call(
+            "rea_execute_tool",
+            &json!({"tool_name": "rea_execute_tool", "arguments": {"tool_name": "rea_execute_tool"}}),
+        );
+        assert!(result.unwrap_err().contains("cannot invoke itself"));
+    }
+
+    #[test]
+    fn meta_tool_validates_target_and_argument_shape() {
+        assert!(
+            handle_tool_call("rea_execute_tool", &json!({"tool_name": "no_such_tool"})).is_err()
+        );
+        assert!(
+            handle_tool_call(
+                "rea_execute_tool",
+                &json!({"tool_name": "scan_secrets", "arguments": []})
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn tool_list_contains_expected_tools() {
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
         let names: Vec<_> = list.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(list.len() >= 35, "Expected at least 35 core tools in catalog");
+        assert!(
+            list.len() >= 35,
+            "Expected at least 35 core tools in catalog"
+        );
         assert!(names.contains(&"inspect_electron_fuses"));
         assert!(names.contains(&"analyze_javascript_application"));
         assert!(names.contains(&"inspect_asar"));
@@ -1506,7 +1758,11 @@ mod tests {
         set_profile_full(true);
         let tools = tool_list();
         let list = tools["tools"].as_array().unwrap();
-        assert_eq!(list.len(), 245, "Expected exactly 245 tools in full catalog");
+        assert_eq!(
+            list.len(),
+            245,
+            "Expected exactly 245 tools in full catalog"
+        );
         set_profile_full(false);
     }
 
@@ -1594,7 +1850,7 @@ mod tests {
 
     fn make_test_asar_bytes(json: &str, content: &[u8]) -> Vec<u8> {
         let text = json.as_bytes();
-        let aligned_json = (text.len() + 3) / 4 * 4;
+        let aligned_json = text.len().div_ceil(4) * 4;
         let header_size = (8 + aligned_json) as u32;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&4u32.to_le_bytes());
@@ -1653,7 +1909,10 @@ mod tests {
         });
         let extract_res = handle_tool_call("extract_artifact", &extract_args).unwrap();
         assert_eq!(extract_res["total_files"], 1);
-        assert_eq!(std::fs::read(out_dir.join("main.js")).unwrap(), b"console.log()");
+        assert_eq!(
+            std::fs::read(out_dir.join("main.js")).unwrap(),
+            b"console.log()"
+        );
 
         let _ = std::fs::remove_file(temp_asar);
         let _ = std::fs::remove_dir_all(out_dir);
@@ -1668,7 +1927,8 @@ mod tests {
                 })
             }]);
         "#;
-        let bundle_file = std::env::temp_dir().join(format!("test_bundle_{}.js", std::process::id()));
+        let bundle_file =
+            std::env::temp_dir().join(format!("test_bundle_{}.js", std::process::id()));
         let out_dir = std::env::temp_dir().join(format!("test_recover_{}", std::process::id()));
         std::fs::write(&bundle_file, bundle_code).unwrap();
 
@@ -1679,7 +1939,7 @@ mod tests {
             "rewrite_level": "standard"
         });
         let res = handle_tool_call("recover_javascript_sources", &args).unwrap();
-        assert!(res["recovered_modules"].as_array().unwrap().len() >= 1);
+        assert!(!res["recovered_modules"].as_array().unwrap().is_empty());
         assert!(out_dir.join("src/app.js").exists());
 
         let _ = std::fs::remove_file(bundle_file);
@@ -1690,8 +1950,16 @@ mod tests {
     fn handles_analyze_javascript_application_and_trace_feature_tool_calls() {
         let app_dir = std::env::temp_dir().join(format!("test_app_{}", std::process::id()));
         std::fs::create_dir_all(&app_dir).unwrap();
-        std::fs::write(app_dir.join("index.js"), "import { auth } from './auth.js'; auth();").unwrap();
-        std::fs::write(app_dir.join("auth.js"), "export function auth() { return 'secret_token'; }").unwrap();
+        std::fs::write(
+            app_dir.join("index.js"),
+            "import { auth } from './auth.js'; auth();",
+        )
+        .unwrap();
+        std::fs::write(
+            app_dir.join("auth.js"),
+            "export function auth() { return 'secret_token'; }",
+        )
+        .unwrap();
 
         // 1. analyze_javascript_application
         let analyze_args = json!({ "input_path": app_dir.to_string_lossy() });
@@ -1711,7 +1979,11 @@ mod tests {
         });
         let trace_res = handle_tool_call("trace_application_feature", &trace_args).unwrap();
         let visited = trace_res["visited_modules"].as_array().unwrap();
-        assert!(visited.iter().any(|v| v.as_str().unwrap().contains("auth.js")));
+        assert!(
+            visited
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("auth.js"))
+        );
 
         let _ = std::fs::remove_dir_all(app_dir);
     }
@@ -1778,7 +2050,8 @@ mod tests {
 
     #[test]
     fn test_evidence_tools_dispatch() {
-        let bundle = handle_tool_call("get_evidence_bundle", &json!({ "detail": "summary" })).unwrap();
+        let bundle =
+            handle_tool_call("get_evidence_bundle", &json!({ "detail": "summary" })).unwrap();
         assert_eq!(bundle["status"], "complete");
 
         let rec_args = json!({
@@ -1794,19 +2067,32 @@ mod tests {
 
     #[test]
     fn test_plist_and_apple_graph_tools_dispatch() {
-        let plist_res = handle_tool_call("inspect_plist", &json!({ "path": "/nonexistent/test.plist" })).unwrap();
+        let plist_res = handle_tool_call(
+            "inspect_plist",
+            &json!({ "path": "/nonexistent/test.plist" }),
+        )
+        .unwrap();
         assert_eq!(plist_res["status"], "error");
 
-        let apple_graph = handle_tool_call("project_apple_application_graph", &json!({ "inventory_evidence": [] })).unwrap();
+        let apple_graph = handle_tool_call(
+            "project_apple_application_graph",
+            &json!({ "inventory_evidence": [] }),
+        )
+        .unwrap();
         assert_eq!(apple_graph["status"], "complete");
     }
 
     #[test]
     fn test_managed_and_debugger_tools_dispatch() {
-        let mg = handle_tool_call("inspect_managed_artifact", &json!({ "path": "/nonexistent/test.dll" })).unwrap();
+        let mg = handle_tool_call(
+            "inspect_managed_artifact",
+            &json!({ "path": "/nonexistent/test.dll" }),
+        )
+        .unwrap();
         assert_eq!(mg["status"], "error");
 
-        let gdb_status = handle_tool_call("gdb_session_status", &json!({ "session_id": "test_sess" })).unwrap();
+        let gdb_status =
+            handle_tool_call("gdb_session_status", &json!({ "session_id": "test_sess" })).unwrap();
         assert_eq!(gdb_status["status"], "closed");
     }
 
@@ -1821,11 +2107,19 @@ mod tests {
             "modules": [{ "path": "a.js", "bytes": 20, "lines": 2, "exports": ["init", "run"] }],
             "edges": []
         });
-        let diff_res = handle_tool_call("diff_applications", &json!({ "left": left, "right": right })).unwrap();
+        let diff_res = handle_tool_call(
+            "diff_applications",
+            &json!({ "left": left, "right": right }),
+        )
+        .unwrap();
         assert_eq!(diff_res["changed_modules"].as_array().unwrap().len(), 1);
 
         // 2. compare_source_to_bundle
-        let compare_res = handle_tool_call("compare_source_to_bundle", &json!({ "reference": left, "application": right })).unwrap();
+        let compare_res = handle_tool_call(
+            "compare_source_to_bundle",
+            &json!({ "reference": left, "application": right }),
+        )
+        .unwrap();
         assert_eq!(compare_res["changed_modules"].as_array().unwrap().len(), 1);
 
         // 3. export_environment_bundle
@@ -1834,16 +2128,39 @@ mod tests {
         assert_eq!(env_res["status"], "ready");
 
         // 4. inspect_byte_entropy & list_strings on temp file
-        let temp_bin = std::env::temp_dir().join(format!("test_entropy_{}.bin", std::process::id()));
-        std::fs::write(&temp_bin, b"HELLO_WORLD_SECRET_KEY_1234567890\n\x00\x00\x00\xff\xfe").unwrap();
-        let entropy_res = handle_tool_call("inspect_byte_entropy", &json!({ "path": temp_bin.to_string_lossy() })).unwrap();
+        let temp_bin =
+            std::env::temp_dir().join(format!("test_entropy_{}.bin", std::process::id()));
+        std::fs::write(
+            &temp_bin,
+            b"HELLO_WORLD_SECRET_KEY_1234567890\n\x00\x00\x00\xff\xfe",
+        )
+        .unwrap();
+        let entropy_res = handle_tool_call(
+            "inspect_byte_entropy",
+            &json!({ "path": temp_bin.to_string_lossy() }),
+        )
+        .unwrap();
         assert!(entropy_res["overall_entropy"].as_f64().unwrap() > 0.0);
 
-        let strings_res = handle_tool_call("list_strings", &json!({ "path": temp_bin.to_string_lossy(), "min_length": 4 })).unwrap();
-        assert!(strings_res["strings"].as_array().unwrap().iter().any(|s| s.as_str().unwrap().contains("HELLO_WORLD")));
+        let strings_res = handle_tool_call(
+            "list_strings",
+            &json!({ "path": temp_bin.to_string_lossy(), "min_length": 4 }),
+        )
+        .unwrap();
+        assert!(
+            strings_res["strings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| s.as_str().unwrap().contains("HELLO_WORLD"))
+        );
 
         // 5. inspect_artifact universal
-        let artifact_res = handle_tool_call("inspect_artifact", &json!({ "path": temp_bin.to_string_lossy() })).unwrap();
+        let artifact_res = handle_tool_call(
+            "inspect_artifact",
+            &json!({ "path": temp_bin.to_string_lossy() }),
+        )
+        .unwrap();
         assert_eq!(artifact_res["artifact_kind"], "file");
 
         let _ = std::fs::remove_file(temp_bin);
@@ -1854,10 +2171,14 @@ mod tests {
         let wasm_file2 = std::env::temp_dir().join(format!("test_w2_{}.wasm", std::process::id()));
         std::fs::write(&wasm_file1, wasm_sample).unwrap();
         std::fs::write(&wasm_file2, wasm_sample).unwrap();
-        let wasm_diff = handle_tool_call("compare_wasm_interfaces", &json!({
-            "left_path": wasm_file1.to_string_lossy(),
-            "right_path": wasm_file2.to_string_lossy()
-        })).unwrap();
+        let wasm_diff = handle_tool_call(
+            "compare_wasm_interfaces",
+            &json!({
+                "left_path": wasm_file1.to_string_lossy(),
+                "right_path": wasm_file2.to_string_lossy()
+            }),
+        )
+        .unwrap();
         assert!(wasm_diff["is_identical"].as_bool().unwrap());
         let _ = std::fs::remove_file(wasm_file1);
         let _ = std::fs::remove_file(wasm_file2);

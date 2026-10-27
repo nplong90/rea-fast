@@ -1,5 +1,5 @@
 use oxc_allocator::Allocator;
-use oxc_ast::{ast::*, AstKind};
+use oxc_ast::{AstKind, ast::*};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::{ScopeFlags, SemanticBuilder};
 use oxc_span::{GetSpan, SourceType, Span};
@@ -151,12 +151,16 @@ impl<'s> Coordinates<'s> {
 pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
     let coordinates = Coordinates::new(source);
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, SourceType::from_path(file_path).unwrap_or_default())
-        .with_options(ParseOptions {
-            parse_regular_expression: true,
-            ..ParseOptions::default()
-        })
-        .parse();
+    let parsed = Parser::new(
+        &allocator,
+        source,
+        SourceType::from_path(file_path).unwrap_or_default(),
+    )
+    .with_options(ParseOptions {
+        parse_regular_expression: true,
+        ..ParseOptions::default()
+    })
+    .parse();
 
     let mut graph = SemanticGraph::default();
     let module_id = format!("mod_{file_path}");
@@ -194,7 +198,10 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
         match node.kind() {
             AstKind::Function(f) => {
                 let span = f.span;
-                let name = f.id.as_ref().map(|id| id.name.to_string()).unwrap_or_else(|| "<anonymous>".into());
+                let name =
+                    f.id.as_ref()
+                        .map(|id| id.name.to_string())
+                        .unwrap_or_else(|| "<anonymous>".into());
                 let fn_id = format!("fn_{file_path}_{}_{}", span.start, span.end);
 
                 let fn_node = SemanticNode {
@@ -226,7 +233,13 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
                 let mut params = Vec::new();
                 for param in &f.params.items {
                     let p_span = param.span;
-                    let p_name = param.pattern.get_binding_identifiers().into_iter().next().map(|i| i.name.to_string()).unwrap_or_else(|| "arg".into());
+                    let p_name = param
+                        .pattern
+                        .get_binding_identifiers()
+                        .into_iter()
+                        .next()
+                        .map(|i| i.name.to_string())
+                        .unwrap_or_else(|| "arg".into());
                     let p_id = format!("param_{file_path}_{}_{}", p_span.start, p_span.end);
 
                     graph.nodes.push(SemanticNode {
@@ -277,7 +290,13 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
                 let mut params = Vec::new();
                 for param in &f.params.items {
                     let p_span = param.span;
-                    let p_name = param.pattern.get_binding_identifiers().into_iter().next().map(|i| i.name.to_string()).unwrap_or_else(|| "arg".into());
+                    let p_name = param
+                        .pattern
+                        .get_binding_identifiers()
+                        .into_iter()
+                        .next()
+                        .map(|i| i.name.to_string())
+                        .unwrap_or_else(|| "arg".into());
                     let p_id = format!("param_{file_path}_{}_{}", p_span.start, p_span.end);
 
                     graph.nodes.push(SemanticNode {
@@ -331,21 +350,20 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
                     }
 
                     // Alias detection: const a = b;
-                    if let Some(init) = &v.init {
-                        if let Expression::Identifier(src_id) = init.get_inner_expression() {
-                            if let Some(ref_id) = src_id.reference_id.get() {
-                                let reference = semantic.scoping().get_reference(ref_id);
-                                if let Some(target_sym) = reference.symbol_id() {
-                                    if let Some(target_node) = symbol_nodes.get(&target_sym) {
-                                        graph.edges.push(SemanticEdge {
-                                            source: b_id.clone(),
-                                            target: target_node.clone(),
-                                            relation: "aliases".into(),
-                                            location: Some(coordinates.location(init.span())),
-                                        });
-                                    }
-                                }
-                            }
+                    if let Some(init) = &v.init
+                        && let Expression::Identifier(src_id) = init.get_inner_expression()
+                        && let Some(ref_id) = src_id.reference_id.get()
+                    {
+                        let reference = semantic.scoping().get_reference(ref_id);
+                        if let Some(target_sym) = reference.symbol_id()
+                            && let Some(target_node) = symbol_nodes.get(&target_sym)
+                        {
+                            graph.edges.push(SemanticEdge {
+                                source: b_id.clone(),
+                                target: target_node.clone(),
+                                relation: "aliases".into(),
+                                location: Some(coordinates.location(init.span())),
+                            });
                         }
                     }
                 }
@@ -387,7 +405,10 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
                             for (idx, arg) in call.arguments.iter().enumerate() {
                                 if let Some(param_id) = param_ids.get(idx) {
                                     let arg_span = arg.span();
-                                    let arg_id = format!("arg_{file_path}_{}_{}", arg_span.start, arg_span.end);
+                                    let arg_id = format!(
+                                        "arg_{file_path}_{}_{}",
+                                        arg_span.start, arg_span.end
+                                    );
                                     let arg_text = arg_span.source_text(source).to_string();
 
                                     graph.nodes.push(SemanticNode {
@@ -412,34 +433,37 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
                 }
 
                 // Special handling: IPC channels as boundary nodes
-                if callee_text.starts_with("ipcRenderer.") || callee_text.starts_with("ipcMain.") {
-                    if let Some(first_arg) = call.arguments.first() {
-                        let arg_span = first_arg.span();
-                        let channel = arg_span.source_text(source).trim_matches('\'').trim_matches('"');
-                        let boundary_id = format!("ipc_channel_{channel}");
+                if (callee_text.starts_with("ipcRenderer.") || callee_text.starts_with("ipcMain."))
+                    && let Some(first_arg) = call.arguments.first()
+                {
+                    let arg_span = first_arg.span();
+                    let channel = arg_span
+                        .source_text(source)
+                        .trim_matches('\'')
+                        .trim_matches('"');
+                    let boundary_id = format!("ipc_channel_{channel}");
 
-                        graph.nodes.push(SemanticNode {
-                            id: boundary_id.clone(),
-                            class: SemanticNodeClass::Boundary,
-                            name: channel.to_string(),
-                            file: file_path.to_string(),
-                            location: coordinates.location(arg_span),
-                            value: Some(channel.to_string()),
-                        });
+                    graph.nodes.push(SemanticNode {
+                        id: boundary_id.clone(),
+                        class: SemanticNodeClass::Boundary,
+                        name: channel.to_string(),
+                        file: file_path.to_string(),
+                        location: coordinates.location(arg_span),
+                        value: Some(channel.to_string()),
+                    });
 
-                        let rel = if callee_text.contains(".send") || callee_text.contains(".invoke") {
-                            "constructs-request"
-                        } else {
-                            "registers-listener"
-                        };
+                    let rel = if callee_text.contains(".send") || callee_text.contains(".invoke") {
+                        "constructs-request"
+                    } else {
+                        "registers-listener"
+                    };
 
-                        graph.edges.push(SemanticEdge {
-                            source: call_id.clone(),
-                            target: boundary_id,
-                            relation: rel.into(),
-                            location: Some(coordinates.location(call_span)),
-                        });
-                    }
+                    graph.edges.push(SemanticEdge {
+                        source: call_id.clone(),
+                        target: boundary_id,
+                        relation: rel.into(),
+                        location: Some(coordinates.location(call_span)),
+                    });
                 }
             }
             AstKind::ReturnStatement(ret) => {
@@ -469,34 +493,39 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
             AstKind::IdentifierReference(ident) => {
                 if let Some(ref_id) = ident.reference_id.get() {
                     let reference = semantic.scoping().get_reference(ref_id);
-                    if let Some(sym_id) = reference.symbol_id() {
-                        if let Some(target_id) = symbol_nodes.get(&sym_id) {
-                            let span = ident.span;
-                            let rel = if reference.is_write() {
-                                "writes"
-                            } else {
-                                "reads"
-                            };
+                    if let Some(sym_id) = reference.symbol_id()
+                        && let Some(target_id) = symbol_nodes.get(&sym_id)
+                    {
+                        let span = ident.span;
+                        let rel = if reference.is_write() {
+                            "writes"
+                        } else {
+                            "reads"
+                        };
 
-                            let ref_node_id = format!("ref_{file_path}_{}_{}", span.start, span.end);
+                        let ref_node_id = format!("ref_{file_path}_{}_{}", span.start, span.end);
+                        graph.edges.push(SemanticEdge {
+                            source: ref_node_id,
+                            target: target_id.clone(),
+                            relation: rel.into(),
+                            location: Some(coordinates.location(span)),
+                        });
+
+                        // Closure capture: check if symbol scope is outer to current scope
+                        let sym_scope = semantic.scoping().symbol_scope_id(sym_id);
+                        let cur_scope = node.scope_id();
+                        if cur_scope != sym_scope
+                            && !semantic
+                                .scoping()
+                                .scope_flags(sym_scope)
+                                .contains(ScopeFlags::Top)
+                        {
                             graph.edges.push(SemanticEdge {
-                                source: ref_node_id,
-                                target: target_id.clone(),
-                                relation: rel.into(),
+                                source: target_id.clone(),
+                                target: format!("scope_{cur_scope:?}"),
+                                relation: "captures".into(),
                                 location: Some(coordinates.location(span)),
                             });
-
-                            // Closure capture: check if symbol scope is outer to current scope
-                            let sym_scope = semantic.scoping().symbol_scope_id(sym_id);
-                            let cur_scope = node.scope_id();
-                            if cur_scope != sym_scope && !semantic.scoping().scope_flags(sym_scope).contains(ScopeFlags::Top) {
-                                graph.edges.push(SemanticEdge {
-                                    source: target_id.clone(),
-                                    target: format!("scope_{cur_scope:?}"),
-                                    relation: "captures".into(),
-                                    location: Some(coordinates.location(span)),
-                                });
-                            }
                         }
                     }
                 }
@@ -511,14 +540,21 @@ pub fn build_semantic_graph(source: &str, file_path: &str) -> SemanticGraph {
 
 impl SemanticGraph {
     pub fn trace(&self, query: &SemanticQuery) -> SemanticTraceResult {
-        let node_map: HashMap<&str, &SemanticNode> = self.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let node_map: HashMap<&str, &SemanticNode> =
+            self.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
         let mut fwd_adj: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
         let mut bwd_adj: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
 
         for (i, edge) in self.edges.iter().enumerate() {
-            fwd_adj.entry(&edge.source).or_default().push((i, &edge.target));
-            bwd_adj.entry(&edge.target).or_default().push((i, &edge.source));
+            fwd_adj
+                .entry(&edge.source)
+                .or_default()
+                .push((i, &edge.target));
+            bwd_adj
+                .entry(&edge.target)
+                .or_default()
+                .push((i, &edge.source));
         }
 
         let seed_id = query.seed.node_id.as_str();
@@ -553,7 +589,9 @@ impl SemanticGraph {
 
                     let allowed = match query.direction {
                         TraversalDirection::Callers => edge.relation == "calls",
-                        TraversalDirection::Ownership => edge.relation == "defines" || edge.relation == "owns",
+                        TraversalDirection::Ownership => {
+                            edge.relation == "defines" || edge.relation == "owns"
+                        }
                         _ => {
                             if let Some(allowed_list) = &query.allowed_relations {
                                 allowed_list.contains(&edge.relation)
@@ -606,10 +644,10 @@ impl SemanticGraph {
         let reachable_targets: Vec<SemanticNode> = visited_nodes
             .iter()
             .filter(|n| {
-                if let Some(expected) = &query.expected {
-                    if let Some(classes) = &expected.classes {
-                        return classes.contains(&n.class);
-                    }
+                if let Some(expected) = &query.expected
+                    && let Some(classes) = &expected.classes
+                {
+                    return classes.contains(&n.class);
                 }
                 true
             })
@@ -652,10 +690,19 @@ mod tests {
 
         assert!(graph.nodes.iter().any(|n| n.name == "processInput"));
         assert!(graph.nodes.iter().any(|n| n.name == "main"));
-        assert!(graph.edges.iter().any(|e| e.relation == "argument-to-parameter"));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.relation == "argument-to-parameter")
+        );
         assert!(graph.edges.iter().any(|e| e.relation == "aliases"));
 
-        let process_fn = graph.nodes.iter().find(|n| n.name == "processInput").unwrap();
+        let process_fn = graph
+            .nodes
+            .iter()
+            .find(|n| n.name == "processInput")
+            .unwrap();
 
         let query = SemanticQuery {
             seed: SemanticSeed {
@@ -680,9 +727,17 @@ mod tests {
         "#;
 
         let graph = build_semantic_graph(code, "renderer.js");
-        let boundary = graph.nodes.iter().find(|n| n.class == SemanticNodeClass::Boundary);
+        let boundary = graph
+            .nodes
+            .iter()
+            .find(|n| n.class == SemanticNodeClass::Boundary);
         assert!(boundary.is_some());
         assert_eq!(boundary.unwrap().name, "user:login");
-        assert!(graph.edges.iter().any(|e| e.relation == "constructs-request"));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|e| e.relation == "constructs-request")
+        );
     }
 }

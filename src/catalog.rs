@@ -1,5 +1,5 @@
 use flate2::read::GzDecoder;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
@@ -100,16 +100,15 @@ fn sanitize_tool(mut tool: Value) -> Value {
         map.remove("annotations");
         map.remove("identity");
 
-        if let Some(desc) = map.get_mut("description") {
-            if let Some(s) = desc.as_str() {
-                if s.len() > 250 {
-                    let first_line = s.lines().next().unwrap_or(s);
-                    if first_line.len() > 250 {
-                        *desc = Value::String(format!("{}...", &first_line[..247]));
-                    } else {
-                        *desc = Value::String(first_line.to_string());
-                    }
-                }
+        if let Some(desc) = map.get_mut("description")
+            && let Some(s) = desc.as_str()
+            && s.len() > 250
+        {
+            let first_line = s.lines().next().unwrap_or(s);
+            if first_line.len() > 250 {
+                *desc = Value::String(format!("{}...", &first_line[..247]));
+            } else {
+                *desc = Value::String(first_line.to_string());
             }
         }
     }
@@ -371,19 +370,19 @@ fn load_tools() -> Vec<Value> {
 
     // Append extra native tools that do not appear in catalog
     for extra in extra_native_tools() {
-        if let Some(name) = extra.get("name").and_then(|n| n.as_str()) {
-            if !existing_names.contains(name) {
-                sanitized_tools.push(sanitize_tool(extra));
-            }
+        if let Some(name) = extra.get("name").and_then(|n| n.as_str())
+            && !existing_names.contains(name)
+        {
+            sanitized_tools.push(sanitize_tool(extra));
         }
     }
 
     // Append meta-tools for dynamic discovery and execution
     for meta in meta_tools() {
-        if let Some(name) = meta.get("name").and_then(|n| n.as_str()) {
-            if !existing_names.contains(name) {
-                sanitized_tools.push(sanitize_tool(meta));
-            }
+        if let Some(name) = meta.get("name").and_then(|n| n.as_str())
+            && !existing_names.contains(name)
+        {
+            sanitized_tools.push(sanitize_tool(meta));
         }
     }
 
@@ -418,8 +417,16 @@ pub fn search_tools(query: &str) -> Vec<Value> {
     get_all_tools()
         .iter()
         .filter(|t| {
-            let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_lowercase();
-            let desc = t.get("description").and_then(|d| d.as_str()).unwrap_or("").to_lowercase();
+            let name = t
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let desc = t
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .to_lowercase();
             name.contains(&q) || desc.contains(&q)
         })
         .cloned()
@@ -428,9 +435,9 @@ pub fn search_tools(query: &str) -> Vec<Value> {
 
 /// Check if a tool is registered in the catalog
 pub fn has_tool(name: &str) -> bool {
-    get_all_tools().iter().any(|t| {
-        t.get("name").and_then(|n| n.as_str()) == Some(name)
-    })
+    get_all_tools()
+        .iter()
+        .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
 }
 
 #[cfg(test)]
@@ -440,9 +447,18 @@ mod tests {
     #[test]
     fn test_catalog_tools_count() {
         let tools = get_all_tools();
-        assert_eq!(tools.len(), 245, "Expected exactly 245 tools, got {}", tools.len());
+        assert_eq!(
+            tools.len(),
+            245,
+            "Expected exactly 245 tools, got {}",
+            tools.len()
+        );
         let core = get_core_tools();
-        assert!(core.len() >= 35, "Expected at least 35 core tools, got {}", core.len());
+        assert!(
+            core.len() >= 35,
+            "Expected at least 35 core tools, got {}",
+            core.len()
+        );
     }
 
     #[test]

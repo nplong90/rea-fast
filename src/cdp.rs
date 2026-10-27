@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read as IoRead, Write as IoWrite};
 use std::net::TcpStream;
@@ -6,24 +6,37 @@ use std::path::Path;
 use std::time::Duration;
 
 pub fn fetch_cdp_targets(endpoint: &str) -> Result<Vec<Value>, String> {
-    let cleaned = endpoint.trim_start_matches("http://").trim_start_matches("ws://");
+    let cleaned = endpoint
+        .trim_start_matches("http://")
+        .trim_start_matches("ws://");
     let host_port = cleaned.split('/').next().unwrap_or("127.0.0.1:9222");
 
     let mut stream = TcpStream::connect_timeout(
-        &host_port.parse().map_err(|e| format!("Invalid address {host_port}: {e}"))?,
+        &host_port
+            .parse()
+            .map_err(|e| format!("Invalid address {host_port}: {e}"))?,
         Duration::from_millis(500),
-    ).map_err(|e| format!("Cannot connect to CDP at {host_port}: {e}"))?;
+    )
+    .map_err(|e| format!("Cannot connect to CDP at {host_port}: {e}"))?;
 
-    stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap_or(());
-    stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap_or(());
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap_or(());
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .unwrap_or(());
 
     let req = format!("GET /json/list HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(req.as_bytes()).map_err(|e| format!("Failed to send HTTP: {e}"))?;
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("Failed to send HTTP: {e}"))?;
 
     let mut header_bytes = Vec::new();
     let mut byte = [0u8; 1];
     while !header_bytes.ends_with(b"\r\n\r\n") {
-        stream.read_exact(&mut byte).map_err(|e| format!("Header read failed: {e}"))?;
+        stream
+            .read_exact(&mut byte)
+            .map_err(|e| format!("Header read failed: {e}"))?;
         header_bytes.push(byte[0]);
         if header_bytes.len() > 16384 {
             return Err("HTTP header too large".to_string());
@@ -33,23 +46,28 @@ pub fn fetch_cdp_targets(endpoint: &str) -> Result<Vec<Value>, String> {
     let header_str = String::from_utf8_lossy(&header_bytes);
     let mut content_length = 0usize;
     for line in header_str.lines() {
-        if line.to_ascii_lowercase().starts_with("content-length:") {
-            if let Some(val) = line.split(':').nth(1) {
-                content_length = val.trim().parse().unwrap_or(0);
-            }
+        if line.to_ascii_lowercase().starts_with("content-length:")
+            && let Some(val) = line.split(':').nth(1)
+        {
+            content_length = val.trim().parse().unwrap_or(0);
         }
     }
 
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
-        stream.read_exact(&mut body).map_err(|e| format!("Body read failed: {e}"))?;
+        stream
+            .read_exact(&mut body)
+            .map_err(|e| format!("Body read failed: {e}"))?;
     }
 
     serde_json::from_slice::<Vec<Value>>(&body).map_err(|e| format!("JSON parse error: {e}"))
 }
 
 pub fn list_browser_targets(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     match fetch_cdp_targets(endpoint) {
         Ok(targets) => json!({
             "status": "complete",
@@ -67,12 +85,20 @@ pub fn list_browser_targets(args: &Value) -> Value {
 }
 
 pub fn list_electron_targets(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     match fetch_cdp_targets(endpoint) {
         Ok(targets) => {
             let file_targets: Vec<Value> = targets
                 .into_iter()
-                .filter(|t| t.get("url").and_then(|u| u.as_str()).map(|s| s.starts_with("file://")).unwrap_or(false))
+                .filter(|t| {
+                    t.get("url")
+                        .and_then(|u| u.as_str())
+                        .map(|s| s.starts_with("file://"))
+                        .unwrap_or(false)
+                })
                 .collect();
             json!({
                 "status": "complete",
@@ -101,19 +127,28 @@ pub struct CdpSession {
 
 impl CdpSession {
     pub fn connect(ws_url: &str) -> Result<Self, String> {
-        let cleaned = ws_url.trim_start_matches("ws://").trim_start_matches("http://");
+        let cleaned = ws_url
+            .trim_start_matches("ws://")
+            .trim_start_matches("http://");
         let (host_port, path) = match cleaned.find('/') {
             Some(idx) => (&cleaned[..idx], &cleaned[idx..]),
             None => (cleaned, "/"),
         };
 
         let mut stream = TcpStream::connect_timeout(
-            &host_port.parse().map_err(|e| format!("Invalid address {host_port}: {e}"))?,
+            &host_port
+                .parse()
+                .map_err(|e| format!("Invalid address {host_port}: {e}"))?,
             Duration::from_millis(1500),
-        ).map_err(|e| format!("Cannot connect to WebSocket at {host_port}: {e}"))?;
+        )
+        .map_err(|e| format!("Cannot connect to WebSocket at {host_port}: {e}"))?;
 
-        stream.set_read_timeout(Some(Duration::from_secs(10))).unwrap_or(());
-        stream.set_write_timeout(Some(Duration::from_secs(10))).unwrap_or(());
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap_or(());
+        stream
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .unwrap_or(());
 
         // Send HTTP WebSocket upgrade handshake
         let handshake = format!(
@@ -124,13 +159,17 @@ impl CdpSession {
              Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
              Sec-WebSocket-Version: 13\r\n\r\n"
         );
-        stream.write_all(handshake.as_bytes()).map_err(|e| format!("Handshake write failed: {e}"))?;
+        stream
+            .write_all(handshake.as_bytes())
+            .map_err(|e| format!("Handshake write failed: {e}"))?;
 
         // Read handshake response headers
         let mut response_buf = Vec::new();
         let mut byte = [0u8; 1];
         while !response_buf.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).map_err(|e| format!("Handshake read failed: {e}"))?;
+            stream
+                .read_exact(&mut byte)
+                .map_err(|e| format!("Handshake read failed: {e}"))?;
             response_buf.push(byte[0]);
             if response_buf.len() > 8192 {
                 return Err("WebSocket handshake response too large".to_string());
@@ -139,7 +178,10 @@ impl CdpSession {
 
         let resp_str = String::from_utf8_lossy(&response_buf);
         if !resp_str.contains("101 Switching Protocols") && !resp_str.contains("101 ") {
-            return Err(format!("WebSocket handshake rejected: {}", resp_str.lines().next().unwrap_or("")));
+            return Err(format!(
+                "WebSocket handshake rejected: {}",
+                resp_str.lines().next().unwrap_or("")
+            ));
         }
 
         Ok(Self { stream, next_id: 1 })
@@ -168,15 +210,23 @@ impl CdpSession {
             masked.push(b ^ mask_key[i % 4]);
         }
 
-        self.stream.write_all(&header).map_err(|e| format!("Frame header write error: {e}"))?;
-        self.stream.write_all(&masked).map_err(|e| format!("Frame payload write error: {e}"))?;
-        self.stream.flush().map_err(|e| format!("Flush error: {e}"))?;
+        self.stream
+            .write_all(&header)
+            .map_err(|e| format!("Frame header write error: {e}"))?;
+        self.stream
+            .write_all(&masked)
+            .map_err(|e| format!("Frame payload write error: {e}"))?;
+        self.stream
+            .flush()
+            .map_err(|e| format!("Flush error: {e}"))?;
         Ok(())
     }
 
     pub fn read_message(&mut self) -> Result<String, String> {
         let mut header = [0u8; 2];
-        self.stream.read_exact(&mut header).map_err(|e| format!("WS read error: {e}"))?;
+        self.stream
+            .read_exact(&mut header)
+            .map_err(|e| format!("WS read error: {e}"))?;
         let opcode = header[0] & 0x0F;
         let masked = (header[1] & 0x80) != 0;
         let len_code = (header[1] & 0x7F) as usize;
@@ -184,12 +234,16 @@ impl CdpSession {
         let payload_len = match len_code {
             126 => {
                 let mut buf = [0u8; 2];
-                self.stream.read_exact(&mut buf).map_err(|e| format!("WS len16 read error: {e}"))?;
+                self.stream
+                    .read_exact(&mut buf)
+                    .map_err(|e| format!("WS len16 read error: {e}"))?;
                 u16::from_be_bytes(buf) as usize
             }
             127 => {
                 let mut buf = [0u8; 8];
-                self.stream.read_exact(&mut buf).map_err(|e| format!("WS len64 read error: {e}"))?;
+                self.stream
+                    .read_exact(&mut buf)
+                    .map_err(|e| format!("WS len64 read error: {e}"))?;
                 u64::from_be_bytes(buf) as usize
             }
             n => n,
@@ -197,14 +251,18 @@ impl CdpSession {
 
         let mask_key = if masked {
             let mut key = [0u8; 4];
-            self.stream.read_exact(&mut key).map_err(|e| format!("WS mask read error: {e}"))?;
+            self.stream
+                .read_exact(&mut key)
+                .map_err(|e| format!("WS mask read error: {e}"))?;
             Some(key)
         } else {
             None
         };
 
         let mut payload = vec![0u8; payload_len];
-        self.stream.read_exact(&mut payload).map_err(|e| format!("WS payload read error: {e}"))?;
+        self.stream
+            .read_exact(&mut payload)
+            .map_err(|e| format!("WS payload read error: {e}"))?;
 
         if let Some(m) = mask_key {
             for (i, b) in payload.iter_mut().enumerate() {
@@ -234,13 +292,13 @@ impl CdpSession {
         let start = std::time::Instant::now();
         while start.elapsed() < Duration::from_secs(10) {
             let msg = self.read_message()?;
-            if let Ok(val) = serde_json::from_str::<Value>(&msg) {
-                if val.get("id").and_then(|v| v.as_u64()) == Some(id) {
-                    if let Some(err) = val.get("error") {
-                        return Err(format!("CDP error: {}", err));
-                    }
-                    return Ok(val.get("result").cloned().unwrap_or(json!({})));
+            if let Ok(val) = serde_json::from_str::<Value>(&msg)
+                && val.get("id").and_then(|v| v.as_u64()) == Some(id)
+            {
+                if let Some(err) = val.get("error") {
+                    return Err(format!("CDP error: {}", err));
                 }
+                return Ok(val.get("result").cloned().unwrap_or(json!({})));
             }
         }
         Err(format!("CDP call '{method}' timed out waiting for id {id}"))
@@ -250,16 +308,25 @@ impl CdpSession {
 fn resolve_ws_target(endpoint: &str, target_id: Option<&str>) -> Result<(String, Value), String> {
     let targets = fetch_cdp_targets(endpoint)?;
     let target = if let Some(id) = target_id {
-        targets.iter().find(|t| t.get("id").and_then(|v| v.as_str()) == Some(id))
+        targets
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some(id))
     } else {
         // Find first page target, or fallback to first target with webSocketDebuggerUrl
-        targets.iter().find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
-            .or_else(|| targets.iter().find(|t| t.get("webSocketDebuggerUrl").is_some()))
+        targets
+            .iter()
+            .find(|t| t.get("type").and_then(|v| v.as_str()) == Some("page"))
+            .or_else(|| {
+                targets
+                    .iter()
+                    .find(|t| t.get("webSocketDebuggerUrl").is_some())
+            })
     };
 
     match target {
         Some(t) => {
-            let ws = t.get("webSocketDebuggerUrl")
+            let ws = t
+                .get("webSocketDebuggerUrl")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Target lacks webSocketDebuggerUrl".to_string())?;
             Ok((ws.to_string(), t.clone()))
@@ -273,20 +340,36 @@ fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
     const TABLE: [i8; 256] = {
         let mut t = [-1i8; 256];
         let mut i = 0u8;
-        while i < 26 { t[(b'A' + i) as usize] = i as i8; i += 1; }
-        i = 0; while i < 26 { t[(b'a' + i) as usize] = (26 + i) as i8; i += 1; }
-        i = 0; while i < 10 { t[(b'0' + i) as usize] = (52 + i) as i8; i += 1; }
+        while i < 26 {
+            t[(b'A' + i) as usize] = i as i8;
+            i += 1;
+        }
+        i = 0;
+        while i < 26 {
+            t[(b'a' + i) as usize] = (26 + i) as i8;
+            i += 1;
+        }
+        i = 0;
+        while i < 10 {
+            t[(b'0' + i) as usize] = (52 + i) as i8;
+            i += 1;
+        }
         t[b'+' as usize] = 62;
         t[b'/' as usize] = 63;
         t
     };
-    let clean: Vec<u8> = s.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
+    let clean: Vec<u8> = s
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
+        .collect();
     let mut out = Vec::with_capacity(clean.len() * 3 / 4);
     for chunk in clean.chunks(4) {
         let mut val = 0u32;
         for &b in chunk {
             let v = TABLE[b as usize];
-            if v < 0 { return Err(format!("Invalid base64 byte: {}", b as char)); }
+            if v < 0 {
+                return Err(format!("Invalid base64 byte: {}", b as char));
+            }
             val = (val << 6) | (v as u32);
         }
         match chunk.len() {
@@ -313,9 +396,15 @@ fn decode_base64(s: &str) -> Result<Vec<u8>, String> {
 // ---------------------------------------------------------
 
 pub fn capture_web_screenshot(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     let target_id = args.get("target_id").and_then(|v| v.as_str());
-    let output_path = args.get("output_path").or_else(|| args.get("output_file")).and_then(|v| v.as_str());
+    let output_path = args
+        .get("output_path")
+        .or_else(|| args.get("output_file"))
+        .and_then(|v| v.as_str());
     let format = args.get("format").and_then(|v| v.as_str()).unwrap_or("png");
 
     let (ws_url, target_info) = match resolve_ws_target(endpoint, target_id) {
@@ -325,7 +414,9 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
 
     let mut session = match CdpSession::connect(&ws_url) {
         Ok(s) => s,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to connect to page WS: {e}") }),
+        Err(e) => {
+            return json!({ "status": "error", "message": format!("Failed to connect to page WS: {e}") });
+        }
     };
 
     let params = json!({
@@ -355,7 +446,8 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
                             result["saved_path"] = json!(out);
                         }
                         Err(e) => {
-                            result["save_error"] = json!(format!("Failed to write file {out}: {e}"));
+                            result["save_error"] =
+                                json!(format!("Failed to write file {out}: {e}"));
                         }
                     },
                     Err(e) => {
@@ -363,7 +455,8 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
                     }
                 }
             } else {
-                result["data_base64_preview"] = json!(if b64.len() > 120 { &b64[..120] } else { b64 });
+                result["data_base64_preview"] =
+                    json!(if b64.len() > 120 { &b64[..120] } else { b64 });
             }
 
             result
@@ -373,9 +466,15 @@ pub fn capture_web_screenshot(args: &Value) -> Value {
 }
 
 pub fn evaluate_web_script(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     let target_id = args.get("target_id").and_then(|v| v.as_str());
-    let expression = args.get("expression").and_then(|v| v.as_str()).unwrap_or("window.location.href");
+    let expression = args
+        .get("expression")
+        .and_then(|v| v.as_str())
+        .unwrap_or("window.location.href");
 
     let (ws_url, target_info) = match resolve_ws_target(endpoint, target_id) {
         Ok(t) => t,
@@ -411,7 +510,10 @@ pub fn evaluate_web_script(args: &Value) -> Value {
 }
 
 pub fn inspect_web_page(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     let target_id = args.get("target_id").and_then(|v| v.as_str());
 
     let (ws_url, target_info) = match resolve_ws_target(endpoint, target_id) {
@@ -435,10 +537,16 @@ pub fn inspect_web_page(args: &Value) -> Value {
         scripts: Array.from(document.scripts || []).slice(0, 20).map(s => s.src || '<inline>')
     })";
 
-    let page_meta = session.call("Runtime.evaluate", json!({
-        "expression": eval_code,
-        "returnByValue": true
-    })).ok().and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
+    let page_meta = session
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": eval_code,
+                "returnByValue": true
+            }),
+        )
+        .ok()
+        .and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
 
     json!({
         "status": "complete",
@@ -471,7 +579,10 @@ pub fn discover_webmcp_tools(_args: &Value) -> Value {
 }
 
 pub fn observe_web_session(args: &Value) -> Value {
-    let observation_ms = args.get("observation_ms").and_then(|v| v.as_u64()).unwrap_or(1000);
+    let observation_ms = args
+        .get("observation_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(1000);
     json!({
         "status": "complete",
         "observation_ms": observation_ms,
@@ -492,9 +603,15 @@ pub fn observe_web_execution(args: &Value) -> Value {
 }
 
 pub fn export_web_scripts(args: &Value) -> Value {
-    let endpoint = args.get("cdp_endpoint").and_then(|v| v.as_str()).unwrap_or("http://127.0.0.1:9222");
+    let endpoint = args
+        .get("cdp_endpoint")
+        .and_then(|v| v.as_str())
+        .unwrap_or("http://127.0.0.1:9222");
     let target_id = args.get("target_id").and_then(|v| v.as_str());
-    let out_dir = args.get("output_directory").and_then(|v| v.as_str()).unwrap_or("./exported_scripts");
+    let out_dir = args
+        .get("output_directory")
+        .and_then(|v| v.as_str())
+        .unwrap_or("./exported_scripts");
 
     let (ws_url, _target_info) = match resolve_ws_target(endpoint, target_id) {
         Ok(t) => t,
@@ -508,10 +625,16 @@ pub fn export_web_scripts(args: &Value) -> Value {
 
     // Dump scripts via document.scripts evaluation
     let eval_code = "Array.from(document.scripts).map(s => ({ src: s.src, content: s.innerHTML }))";
-    let scripts_data = session.call("Runtime.evaluate", json!({
-        "expression": eval_code,
-        "returnByValue": true
-    })).ok().and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
+    let scripts_data = session
+        .call(
+            "Runtime.evaluate",
+            json!({
+                "expression": eval_code,
+                "returnByValue": true
+            }),
+        )
+        .ok()
+        .and_then(|r| r.get("result").and_then(|v| v.get("value")).cloned());
 
     let _ = fs::create_dir_all(out_dir);
     let mut exported = Vec::new();

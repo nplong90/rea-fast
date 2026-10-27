@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -100,7 +100,9 @@ pub fn gdb_console(args: &Value) -> Value {
     let sessions = get_sessions().read().unwrap();
     let session = match sessions.get(session_id) {
         Some(s) => s,
-        None => return json!({ "status": "error", "message": format!("Session {session_id} not found") }),
+        None => {
+            return json!({ "status": "error", "message": format!("Session {session_id} not found") });
+        }
     };
 
     let start_idx = {
@@ -123,7 +125,10 @@ pub fn gdb_console(args: &Value) -> Value {
         let log = session.output_log.lock().unwrap();
         if log.len() > start_idx {
             collected = log[start_idx..].to_vec();
-            if collected.iter().any(|l| l.starts_with("^done") || l.starts_with("^error") || l == "(gdb)") {
+            if collected
+                .iter()
+                .any(|l| l.starts_with("^done") || l.starts_with("^error") || l == "(gdb)")
+            {
                 break;
             }
         }
@@ -207,7 +212,9 @@ pub fn rizin_debug_command(args: &Value) -> Value {
     let sessions = get_sessions().read().unwrap();
     let session = match sessions.get(session_id) {
         Some(s) => s,
-        None => return json!({ "status": "error", "message": format!("Session {session_id} not found") }),
+        None => {
+            return json!({ "status": "error", "message": format!("Session {session_id} not found") });
+        }
     };
 
     let start_idx = {
@@ -286,7 +293,10 @@ pub fn start_frida_session(args: &Value) -> Value {
 }
 
 pub fn frida_session_status(args: &Value) -> Value {
-    let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     json!({
         "status": "active",
         "session_id": session_id,
@@ -318,7 +328,10 @@ pub fn resume_frida_session(_args: &Value) -> Value {
 }
 
 pub fn close_frida_session(args: &Value) -> Value {
-    let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
+    let session_id = args
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     json!({
         "status": "closed",
         "session_id": session_id

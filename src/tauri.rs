@@ -1,11 +1,6 @@
 use regex::Regex;
 use serde::Serialize;
-use std::{
-    error::Error,
-    fs,
-    path::Path,
-    sync::LazyLock,
-};
+use std::{error::Error, fs, path::Path, sync::LazyLock};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TauriInfo {
@@ -92,10 +87,10 @@ impl TauriScanner {
         idx = 0;
         while let Some(start) = text[idx..].find(r#"{"build""#) {
             let abs_start = idx + start;
-            if let Some(cfg) = Self::try_parse_json_slice(&text[abs_start..]) {
-                if cfg.get("tauri").is_some() || cfg.get("bundle").is_some() {
-                    return Some(cfg);
-                }
+            if let Some(cfg) = Self::try_parse_json_slice(&text[abs_start..])
+                && (cfg.get("tauri").is_some() || cfg.get("bundle").is_some())
+            {
+                return Some(cfg);
             }
             idx = abs_start + 8;
         }
@@ -178,15 +173,17 @@ impl TauriScanner {
                 // Heuristic probe for brotli decompressed asset
                 let mut decompressed = Vec::new();
                 let sub = &bytes[cursor..std::cmp::min(cursor + 512 * 1024, bytes.len())];
-                if let Ok(_) = brotli::BrotliDecompress(&mut std::io::Cursor::new(sub), &mut decompressed) {
-                    if decompressed.starts_with(b"<!DOCTYPE html>") || decompressed.starts_with(b"<html") {
-                        let file_name = format!("brotli_decompressed_{}.html", chunk_id);
-                        fs::write(out_dir.join(&file_name), &decompressed)?;
-                        extracted.push(file_name);
-                        chunk_id += 1;
-                        cursor += sub.len();
-                        continue;
-                    }
+                if brotli::BrotliDecompress(&mut std::io::Cursor::new(sub), &mut decompressed)
+                    .is_ok()
+                    && (decompressed.starts_with(b"<!DOCTYPE html>")
+                        || decompressed.starts_with(b"<html"))
+                {
+                    let file_name = format!("brotli_decompressed_{}.html", chunk_id);
+                    fs::write(out_dir.join(&file_name), &decompressed)?;
+                    extracted.push(file_name);
+                    chunk_id += 1;
+                    cursor += sub.len();
+                    continue;
                 }
                 cursor += 4096;
             }
@@ -240,7 +237,10 @@ impl TauriScanner {
         findings
     }
 
-    pub fn audit_path(path: &Path, extract_to: Option<&Path>) -> Result<TauriAuditResult, Box<dyn Error>> {
+    pub fn audit_path(
+        path: &Path,
+        extract_to: Option<&Path>,
+    ) -> Result<TauriAuditResult, Box<dyn Error>> {
         let bytes = fs::read(path)?;
         let info = Self::detect_binary(&bytes);
         let config = Self::extract_config(&bytes);
@@ -283,9 +283,21 @@ mod tests {
 
         let findings = TauriScanner::scan_ipc(sample, Some("app.js"));
         assert_eq!(findings.len(), 3);
-        assert!(findings.iter().any(|f| f.kind == "invoke" && f.name == "get_user_info"));
-        assert!(findings.iter().any(|f| f.kind == "listen" && f.name == "system_event"));
-        assert!(findings.iter().any(|f| f.kind == "emit" && f.name == "user_login"));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "invoke" && f.name == "get_user_info")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "listen" && f.name == "system_event")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "emit" && f.name == "user_login")
+        );
     }
 
     #[test]

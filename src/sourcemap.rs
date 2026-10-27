@@ -113,9 +113,9 @@ pub fn sanitize_source_path(raw: &str, index: usize) -> PathBuf {
 
     let mut path = PathBuf::new();
     for comp in Path::new(&clean).components() {
-        match comp {
-            Component::Normal(c) => path.push(c),
-            _ => {} // Discard CurDir, ParentDir (..) to prevent path traversal
+        // Discard CurDir, ParentDir (..) to prevent path traversal.
+        if let Component::Normal(c) = comp {
+            path.push(c);
         }
     }
 
@@ -197,12 +197,12 @@ impl SourceMapExtractor {
         let content = fs::read_to_string(input_path)?;
 
         // Case 1: Direct JSON map
-        if input_path.extension().and_then(|s| s.to_str()) == Some("map")
-            || content.trim_start().starts_with('{')
+        if (input_path.extension().and_then(|s| s.to_str()) == Some("map")
+            || content.trim_start().starts_with('{'))
+            && let Ok(res) =
+                Self::extract_from_json(&content, &input_path.to_string_lossy(), output_dir)
         {
-            if let Ok(res) = Self::extract_from_json(&content, &input_path.to_string_lossy(), output_dir) {
-                return Ok(res);
-            }
+            return Ok(res);
         }
 
         // Case 2: Inline Base64 Data URI in JS/TS: //# sourceMappingURL=data:application/json;base64,...
@@ -224,7 +224,9 @@ impl SourceMapExtractor {
                             output_dir,
                         );
                     }
-                    Err(err) => return Err(format!("Failed to decode inline base64 map: {}", err).into()),
+                    Err(err) => {
+                        return Err(format!("Failed to decode inline base64 map: {}", err).into());
+                    }
                 }
             }
         }
@@ -243,7 +245,11 @@ impl SourceMapExtractor {
                 let map_path = input_path.parent().unwrap_or(Path::new(".")).join(map_name);
                 if map_path.exists() {
                     let map_content = fs::read_to_string(&map_path)?;
-                    return Self::extract_from_json(&map_content, &map_path.to_string_lossy(), output_dir);
+                    return Self::extract_from_json(
+                        &map_content,
+                        &map_path.to_string_lossy(),
+                        output_dir,
+                    );
                 }
             }
         }

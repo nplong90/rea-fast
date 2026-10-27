@@ -102,7 +102,10 @@ fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
         while read < buf.len() {
             let n = file.seek_read(&mut buf[read..], offset + read as u64)?;
             if n == 0 {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unexpected EOF"));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Unexpected EOF",
+                ));
             }
             read += n;
         }
@@ -131,10 +134,15 @@ impl AsarArchive {
 
         let size_payload = u32::from_le_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
         let header_size = u32::from_le_bytes([prefix[4], prefix[5], prefix[6], prefix[7]]) as u64;
-        let payload_size = u32::from_le_bytes([prefix[8], prefix[9], prefix[10], prefix[11]]) as u64;
+        let payload_size =
+            u32::from_le_bytes([prefix[8], prefix[9], prefix[10], prefix[11]]) as u64;
         let json_len = u32::from_le_bytes([prefix[12], prefix[13], prefix[14], prefix[15]]) as u64;
 
-        if size_payload != 4 || header_size < 8 || payload_size != header_size - 4 || json_len > payload_size - 4 {
+        if size_payload != 4
+            || header_size < 8
+            || payload_size != header_size - 4
+            || json_len > payload_size - 4
+        {
             return Err("ASAR header has invalid Pickle extents".into());
         }
         if header_size > file_size.saturating_sub(8) {
@@ -148,7 +156,9 @@ impl AsarArchive {
         read_exact_at(&file, &mut json_bytes, 16)?;
 
         // Validate JSON begins with object token (ignoring whitespace)
-        let first_non_ws = json_bytes.iter().find(|&&b| !matches!(b, 0x20 | 0x09 | 0x0a | 0x0d));
+        let first_non_ws = json_bytes
+            .iter()
+            .find(|&&b| !matches!(b, 0x20 | 0x09 | 0x0a | 0x0d));
         if first_non_ws != Some(&b'{') {
             return Err("ASAR header is not a JSON object".into());
         }
@@ -262,11 +272,9 @@ impl AsarArchive {
             let target_path = canonical_dest.join(rel_path);
             // Ensure target is strictly inside destination
             if !target_path.starts_with(&canonical_dest) {
-                return Err(format!(
-                    "Path traversal escape detected for entry: {}",
-                    entry.path
-                )
-                .into());
+                return Err(
+                    format!("Path traversal escape detected for entry: {}", entry.path).into(),
+                );
             }
 
             if let Some(parent) = target_path.parent() {
@@ -277,28 +285,28 @@ impl AsarArchive {
             let observed_hash = format!("{:x}", Sha256::digest(&bytes));
 
             let mut integrity_verified = None;
-            if let Some(integrity) = &entry.integrity {
-                if let Some(expected_hash) = &integrity.hash {
-                    if expected_hash.eq_ignore_ascii_case(&observed_hash) {
-                        integrity_verified = Some(true);
-                    } else {
-                        integrity_verified = Some(false);
-                        let contradiction = IntegrityContradiction {
-                            path: entry.path.clone(),
-                            expected_hash: expected_hash.clone(),
-                            observed_hash: observed_hash.clone(),
-                        };
-                        match integrity_policy {
-                            IntegrityPolicy::Fail => {
-                                return Err(format!(
-                                    "Integrity check failed for '{}': expected {}, observed {}",
-                                    entry.path, expected_hash, observed_hash
-                                )
-                                .into());
-                            }
-                            IntegrityPolicy::RecordAndContinue => {
-                                contradictions.push(contradiction);
-                            }
+            if let Some(integrity) = &entry.integrity
+                && let Some(expected_hash) = &integrity.hash
+            {
+                if expected_hash.eq_ignore_ascii_case(&observed_hash) {
+                    integrity_verified = Some(true);
+                } else {
+                    integrity_verified = Some(false);
+                    let contradiction = IntegrityContradiction {
+                        path: entry.path.clone(),
+                        expected_hash: expected_hash.clone(),
+                        observed_hash: observed_hash.clone(),
+                    };
+                    match integrity_policy {
+                        IntegrityPolicy::Fail => {
+                            return Err(format!(
+                                "Integrity check failed for '{}': expected {}, observed {}",
+                                entry.path, expected_hash, observed_hash
+                            )
+                            .into());
+                        }
+                        IntegrityPolicy::RecordAndContinue => {
+                            contradictions.push(contradiction);
                         }
                     }
                 }
@@ -363,7 +371,10 @@ fn insert_file_node(
     }
 }
 
-pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn std::error::Error>> {
+pub fn pack_asar(
+    src_dir: &Path,
+    dest_asar: &Path,
+) -> Result<PackResult, Box<dyn std::error::Error>> {
     let canonical_src = src_dir.canonicalize()?;
     if !canonical_src.is_dir() {
         return Err("Source path must be a directory".into());
@@ -407,10 +418,10 @@ pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn
         });
 
         #[cfg(unix)]
-        if meta.permissions().mode() & 0o111 != 0 {
-            if let Some(obj) = node.as_object_mut() {
-                obj.insert("executable".to_string(), serde_json::Value::Bool(true));
-            }
+        if meta.permissions().mode() & 0o111 != 0
+            && let Some(obj) = node.as_object_mut()
+        {
+            obj.insert("executable".to_string(), serde_json::Value::Bool(true));
         }
 
         let comps: Vec<&str> = rel_path
@@ -432,7 +443,7 @@ pub fn pack_asar(src_dir: &Path, dest_asar: &Path) -> Result<PackResult, Box<dyn
     let root_json = serde_json::json!({ "files": root_files });
     let json_str = serde_json::to_string(&root_json)?;
     let json_bytes = json_str.as_bytes();
-    let aligned_json = (json_bytes.len() + 3) / 4 * 4;
+    let aligned_json = json_bytes.len().div_ceil(4) * 4;
     let header_size = (8 + aligned_json) as u32;
 
     if let Some(parent) = dest_asar.parent() {
@@ -485,7 +496,12 @@ pub fn extract_artifact(
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
             let count = EXTRACT_COUNTER.fetch_add(1, Ordering::Relaxed);
-            std::env::temp_dir().join(format!("rea_extracted_{}_{}_{}", std::process::id(), nanos, count))
+            std::env::temp_dir().join(format!(
+                "rea_extracted_{}_{}_{}",
+                std::process::id(),
+                nanos,
+                count
+            ))
         }
     };
     archive.extract_all(&dest, integrity_policy)
@@ -498,7 +514,7 @@ mod tests {
 
     fn make_test_asar(json: &str, content: &[u8]) -> Vec<u8> {
         let text = json.as_bytes();
-        let aligned_json = (text.len() + 3) / 4 * 4;
+        let aligned_json = text.len().div_ceil(4) * 4;
         let header_size = (8 + aligned_json) as u32;
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&4u32.to_le_bytes());
@@ -566,7 +582,9 @@ mod tests {
         assert!(err.is_err());
 
         // RecordAndContinue policy should succeed and record contradiction
-        let res = archive.extract_all(&dest_record, IntegrityPolicy::RecordAndContinue).unwrap();
+        let res = archive
+            .extract_all(&dest_record, IntegrityPolicy::RecordAndContinue)
+            .unwrap();
         assert_eq!(res.total_files, 2);
         assert_eq!(res.contradictions.len(), 1);
         assert_eq!(res.contradictions[0].path, "corrupt.txt");
@@ -613,7 +631,11 @@ mod tests {
         fs::create_dir_all(src_dir.join("nested")).unwrap();
 
         fs::write(src_dir.join("index.js"), b"console.log('root');").unwrap();
-        fs::write(src_dir.join("nested/util.js"), b"function helper() { return 42; }").unwrap();
+        fs::write(
+            src_dir.join("nested/util.js"),
+            b"function helper() { return 42; }",
+        )
+        .unwrap();
 
         let pack_res = pack_asar(&src_dir, &dest_asar).unwrap();
         assert_eq!(pack_res.total_files, 2);
@@ -622,12 +644,20 @@ mod tests {
         let archive = AsarArchive::open(&dest_asar).unwrap();
         assert_eq!(archive.entries.len(), 2);
 
-        let ext_res = archive.extract_all(&extract_dir, IntegrityPolicy::Fail).unwrap();
+        let ext_res = archive
+            .extract_all(&extract_dir, IntegrityPolicy::Fail)
+            .unwrap();
         assert_eq!(ext_res.total_files, 2);
         assert_eq!(ext_res.contradictions.len(), 0);
 
-        assert_eq!(fs::read(extract_dir.join("index.js")).unwrap(), b"console.log('root');");
-        assert_eq!(fs::read(extract_dir.join("nested/util.js")).unwrap(), b"function helper() { return 42; }");
+        assert_eq!(
+            fs::read(extract_dir.join("index.js")).unwrap(),
+            b"console.log('root');"
+        );
+        assert_eq!(
+            fs::read(extract_dir.join("nested/util.js")).unwrap(),
+            b"function helper() { return 42; }"
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

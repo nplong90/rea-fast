@@ -1,8 +1,5 @@
 use oxc_allocator::Allocator;
-use oxc_ast::{
-    ast::*,
-    AstKind,
-};
+use oxc_ast::{AstKind, ast::*};
 use oxc_parser::{ParseOptions, Parser};
 use oxc_semantic::SemanticBuilder;
 use oxc_span::{GetSpan, SourceType, Span};
@@ -155,11 +152,18 @@ fn callee_chain<'a>(expr: &'a Expression<'_>) -> Vec<&'a str> {
 }
 
 fn classify_handler(arg: Option<&Argument<'_>>) -> &'static str {
-    match arg.and_then(|a| a.as_expression()).map(|e| e.get_inner_expression()) {
+    match arg
+        .and_then(|a| a.as_expression())
+        .map(|e| e.get_inner_expression())
+    {
         None => "missing",
-        Some(Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)) => "inline-function",
+        Some(Expression::FunctionExpression(_) | Expression::ArrowFunctionExpression(_)) => {
+            "inline-function"
+        }
         Some(Expression::Identifier(_)) => "identifier",
-        Some(Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)) => "member-expression",
+        Some(Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_)) => {
+            "member-expression"
+        }
         _ => "dynamic-expression",
     }
 }
@@ -167,12 +171,16 @@ fn classify_handler(arg: Option<&Argument<'_>>) -> &'static str {
 pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindings {
     let coordinates = Coordinates::new(source);
     let allocator = Allocator::default();
-    let parsed = Parser::new(&allocator, source, SourceType::from_path(path).unwrap_or_default())
-        .with_options(ParseOptions {
-            parse_regular_expression: true,
-            ..ParseOptions::default()
-        })
-        .parse();
+    let parsed = Parser::new(
+        &allocator,
+        source,
+        SourceType::from_path(path).unwrap_or_default(),
+    )
+    .with_options(ParseOptions {
+        parse_regular_expression: true,
+        ..ParseOptions::default()
+    })
+    .parse();
 
     let mut findings = ElectronStaticFindings::default();
     if parsed.panicked {
@@ -190,9 +198,9 @@ pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindin
 
                 // IPC detection
                 if let Some(target) = chain.first().copied() {
-                    let is_ipc_main = target == "ipcMain" || chain.iter().any(|&s| s == "ipcMain");
-                    let is_ipc_renderer = target == "ipcRenderer" || chain.iter().any(|&s| s == "ipcRenderer");
-                    let is_web_contents = target == "webContents" || chain.iter().any(|&s| s == "webContents");
+                    let is_ipc_main = target == "ipcMain" || chain.contains(&"ipcMain");
+                    let is_ipc_renderer = target == "ipcRenderer" || chain.contains(&"ipcRenderer");
+                    let is_web_contents = target == "webContents" || chain.contains(&"webContents");
 
                     if is_ipc_main || is_ipc_renderer || is_web_contents {
                         let method = chain.last().copied().unwrap_or("");
@@ -214,7 +222,11 @@ pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindin
                         };
 
                         if !process.is_empty() {
-                            let channel = call.arguments.first().and_then(|a| a.as_expression()).and_then(string_literal);
+                            let channel = call
+                                .arguments
+                                .first()
+                                .and_then(|a| a.as_expression())
+                                .and_then(string_literal);
                             let handler_kind = classify_handler(call.arguments.get(1));
                             findings.ipc.push(IpcFinding {
                                 channel,
@@ -239,14 +251,14 @@ pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindin
                             .unwrap_or_else(|| "<dynamic>".into());
 
                         let mut exposed_methods = Vec::new();
-                        if let Some(arg2) = call.arguments.get(1).and_then(|a| a.as_expression()) {
-                            if let Expression::ObjectExpression(obj) = arg2.get_inner_expression() {
-                                for prop in &obj.properties {
-                                    if let ObjectPropertyKind::ObjectProperty(p) = prop {
-                                        if let Some(name) = p.key.static_name() {
-                                            exposed_methods.push(name.to_string());
-                                        }
-                                    }
+                        if let Some(arg2) = call.arguments.get(1).and_then(|a| a.as_expression())
+                            && let Expression::ObjectExpression(obj) = arg2.get_inner_expression()
+                        {
+                            for prop in &obj.properties {
+                                if let ObjectPropertyKind::ObjectProperty(p) = prop
+                                    && let Some(name) = p.key.static_name()
+                                {
+                                    exposed_methods.push(name.to_string());
                                 }
                             }
                         }
@@ -268,14 +280,14 @@ pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindin
                         .and_then(string_literal);
 
                     let mut service_name = None;
-                    if let Some(arg3) = call.arguments.get(2).and_then(|a| a.as_expression()) {
-                        if let Expression::ObjectExpression(opts) = arg3.get_inner_expression() {
-                            for prop in &opts.properties {
-                                if let ObjectPropertyKind::ObjectProperty(p) = prop {
-                                    if p.key.static_name().as_deref() == Some("serviceName") {
-                                        service_name = string_literal(&p.value);
-                                    }
-                                }
+                    if let Some(arg3) = call.arguments.get(2).and_then(|a| a.as_expression())
+                        && let Expression::ObjectExpression(opts) = arg3.get_inner_expression()
+                    {
+                        for prop in &opts.properties {
+                            if let ObjectPropertyKind::ObjectProperty(p) = prop
+                                && p.key.static_name().as_deref() == Some("serviceName")
+                            {
+                                service_name = string_literal(&p.value);
                             }
                         }
                     }
@@ -309,34 +321,36 @@ pub fn analyze_electron_source(source: &str, path: &str) -> ElectronStaticFindin
                 let chain = callee_chain(callee);
                 if chain.last().copied() == Some("BrowserWindow") {
                     let mut prefs = WebPreferencesFinding::default();
-                    if let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression()) {
-                        if let Expression::ObjectExpression(opts) = arg.get_inner_expression() {
-                            for prop in &opts.properties {
-                                if let ObjectPropertyKind::ObjectProperty(p) = prop {
-                                    if p.key.static_name().as_deref() == Some("webPreferences") {
-                                        if let Expression::ObjectExpression(wp) = p.value.get_inner_expression() {
-                                            for wp_prop in &wp.properties {
-                                                if let ObjectPropertyKind::ObjectProperty(wpp) = wp_prop {
-                                                    match wpp.key.static_name().as_deref() {
-                                                        Some("nodeIntegration") => {
-                                                            prefs.node_integration = boolean_literal(&wpp.value);
-                                                        }
-                                                        Some("contextIsolation") => {
-                                                            prefs.context_isolation = boolean_literal(&wpp.value);
-                                                        }
-                                                        Some("sandbox") => {
-                                                            prefs.sandbox = boolean_literal(&wpp.value);
-                                                        }
-                                                        Some("webSecurity") => {
-                                                            prefs.web_security = boolean_literal(&wpp.value);
-                                                        }
-                                                        Some("preload") => {
-                                                            prefs.preload = string_literal(&wpp.value);
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                }
+                    if let Some(arg) = new_expr.arguments.first().and_then(|a| a.as_expression())
+                        && let Expression::ObjectExpression(opts) = arg.get_inner_expression()
+                    {
+                        for prop in &opts.properties {
+                            if let ObjectPropertyKind::ObjectProperty(p) = prop
+                                && p.key.static_name().as_deref() == Some("webPreferences")
+                                && let Expression::ObjectExpression(wp) =
+                                    p.value.get_inner_expression()
+                            {
+                                for wp_prop in &wp.properties {
+                                    if let ObjectPropertyKind::ObjectProperty(wpp) = wp_prop {
+                                        match wpp.key.static_name().as_deref() {
+                                            Some("nodeIntegration") => {
+                                                prefs.node_integration =
+                                                    boolean_literal(&wpp.value);
                                             }
+                                            Some("contextIsolation") => {
+                                                prefs.context_isolation =
+                                                    boolean_literal(&wpp.value);
+                                            }
+                                            Some("sandbox") => {
+                                                prefs.sandbox = boolean_literal(&wpp.value);
+                                            }
+                                            Some("webSecurity") => {
+                                                prefs.web_security = boolean_literal(&wpp.value);
+                                            }
+                                            Some("preload") => {
+                                                prefs.preload = string_literal(&wpp.value);
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
@@ -452,12 +466,19 @@ mod tests {
         assert_eq!(findings.ipc[3].operation, "send");
 
         assert_eq!(findings.sender_validations.len(), 1);
-        assert!(findings.sender_validations[0].subject.contains("senderFrame.origin"));
+        assert!(
+            findings.sender_validations[0]
+                .subject
+                .contains("senderFrame.origin")
+        );
         assert_eq!(findings.sender_validations[0].operator, "===");
 
         assert_eq!(findings.context_bridge_apis.len(), 1);
         assert_eq!(findings.context_bridge_apis[0].api_name, "myAPI");
-        assert_eq!(findings.context_bridge_apis[0].exposed_methods, vec!["getData", "ping"]);
+        assert_eq!(
+            findings.context_bridge_apis[0].exposed_methods,
+            vec!["getData", "ping"]
+        );
 
         assert_eq!(findings.browser_windows.len(), 1);
         let wp = &findings.browser_windows[0].web_preferences;
@@ -467,7 +488,13 @@ mod tests {
         assert_eq!(wp.preload.as_deref(), Some("/path/to/preload.js"));
 
         assert_eq!(findings.utility_processes.len(), 1);
-        assert_eq!(findings.utility_processes[0].module_path.as_deref(), Some("./worker.js"));
-        assert_eq!(findings.utility_processes[0].service_name.as_deref(), Some("worker-service"));
+        assert_eq!(
+            findings.utility_processes[0].module_path.as_deref(),
+            Some("./worker.js")
+        );
+        assert_eq!(
+            findings.utility_processes[0].service_name.as_deref(),
+            Some("worker-service")
+        );
     }
 }
