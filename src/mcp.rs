@@ -9,6 +9,7 @@ use crate::{
     native_binary::NativeInspector,
     pipeline::AuditPipeline,
     secrets::SecretScanner,
+    security_io::{self, MAX_SOURCE_FILE_BYTES},
     semantics::{self, SemanticQuery},
     sourcemap::SourceMapExtractor,
     storage_pcap::StoragePcapInspector,
@@ -248,7 +249,7 @@ pub fn build_application_semantic_graph(
             }
         }
     } else if input.is_file() {
-        let source = std::fs::read_to_string(&input)?;
+        let source = security_io::read_string_limited(&input, MAX_SOURCE_FILE_BYTES)?;
         let name = input
             .file_name()
             .and_then(|s| s.to_str())
@@ -258,16 +259,17 @@ pub fn build_application_semantic_graph(
         let root = &input;
         let files = collect_files(&input)?;
         for path in files {
-            if let Ok(source) = std::fs::read_to_string(&path) {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .to_string();
-                let g = semantics::build_semantic_graph(&source, &rel);
-                combined.nodes.extend(g.nodes);
-                combined.edges.extend(g.edges);
-            }
+            // Skipping oversized/unreadable modules would return a fabricated
+            // complete graph with missing nodes. Fail the whole operation.
+            let source = security_io::read_string_limited(&path, MAX_SOURCE_FILE_BYTES)?;
+            let rel = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .to_string();
+            let g = semantics::build_semantic_graph(&source, &rel);
+            combined.nodes.extend(g.nodes);
+            combined.edges.extend(g.edges);
         }
     }
     combined.edges.dedup();
@@ -438,7 +440,8 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
             let source = if let Some(s) = args.get("source").and_then(|v| v.as_str()) {
                 s.to_string()
             } else {
-                std::fs::read_to_string(path_str).map_err(|e| e.to_string())?
+                security_io::read_string_limited(Path::new(path_str), MAX_SOURCE_FILE_BYTES)
+                    .map_err(|e| e.to_string())?
             };
             let findings = electron::analyze_electron_source(&source, path_str);
             serde_json::to_value(findings).map_err(|e| e.to_string())
@@ -655,10 +658,10 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                     let files = collect_files(path).map_err(|e| e.to_string())?;
                     let mut all_res = crate::secrets::SecretScanResult::default();
                     for f in files {
-                        if let Ok(res) = SecretScanner::scan_file(&f) {
-                            all_res.secrets.extend(res.secrets);
-                            all_res.endpoints.extend(res.endpoints);
-                        }
+                        // A partial scan is not an honest "no secrets found".
+                        let res = SecretScanner::scan_file(&f).map_err(|e| e.to_string())?;
+                        all_res.secrets.extend(res.secrets);
+                        all_res.endpoints.extend(res.endpoints);
                     }
                     all_res.total_secrets = all_res.secrets.len();
                     all_res.total_endpoints = all_res.endpoints.len();
@@ -2214,6 +2217,27 @@ mod tests {
             .is_err()
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn oversized_mcp_text_paths_fail_closed_without_partial_results() {
+        let root =
+            std::env::temp_dir().join(format!("rea-fast-mcp-text-bound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let huge = root.join("oversized.js");
+        std::fs::File::create(&huge)
+            .unwrap()
+            .set_len(MAX_SOURCE_FILE_BYTES + 1)
+            .unwrap();
+
+        assert!(build_application_semantic_graph(&huge).is_err());
+        assert!(build_application_semantic_graph(&root).is_err());
+        assert!(handle_tool_call("analyze_electron_source", &json!({"path": huge})).is_err());
+        assert!(handle_tool_call("scan_secrets", &json!({"path": huge})).is_err());
+        assert!(handle_tool_call("scan_secrets", &json!({"path": root})).is_err());
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

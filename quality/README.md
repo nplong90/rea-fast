@@ -29,7 +29,7 @@ node quality/task-gate.mjs --aggregate acceptance-artifacts/task-gate-Linux.json
   tasks as DONE, nor does it force an entire pre-merge backlog to be built at
   once.
 - `--aggregate`: rejects mismatched commits and incomplete/duplicate per-OS
-  reports. It reports `GOAL_IN_PROGRESS` until all 12 atomic tasks meet their
+  reports. It reports `GOAL_IN_PROGRESS` until all declared atomic tasks meet their
   full acceptance conditions. `next_task` selects the next unfinished task
   whose dependencies are completed, including tasks requiring implementation;
   `next_action` explains whether to **IMPLEMENT** missing proof or **VERIFY**

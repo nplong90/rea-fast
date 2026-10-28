@@ -1,7 +1,8 @@
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{error::Error, fs, path::Path, sync::LazyLock};
+use std::{error::Error, path::Path, sync::LazyLock};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SecretFinding {
@@ -169,7 +170,7 @@ impl SecretScanner {
     }
 
     pub fn scan_file(path: &Path) -> Result<SecretScanResult, Box<dyn Error>> {
-        let content = fs::read_to_string(path)?;
+        let content = security_io::read_string_limited(path, MAX_SOURCE_FILE_BYTES)?;
         Ok(Self::scan_str(&content, Some(&path.to_string_lossy())))
     }
 }

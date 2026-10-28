@@ -1,8 +1,9 @@
 use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use std::{
-    fs,
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -263,7 +264,8 @@ impl SourceMapExtractor {
             if !map_name.is_empty() && !map_name.starts_with("data:") {
                 let map_path = input_path.parent().unwrap_or(Path::new(".")).join(map_name);
                 if map_path.exists() {
-                    let map_content = fs::read_to_string(&map_path)?;
+                    let map_content =
+                        security_io::read_string_limited(&map_path, MAX_SOURCE_FILE_BYTES)?;
                     return Self::extract_from_json(
                         &map_content,
                         &map_path.to_string_lossy(),
@@ -324,6 +326,27 @@ mod tests {
         assert!(SourceMapExtractor::extract_from_json(map, "test.map", &root.join("out")).is_err());
         assert_eq!(fs::read_to_string(&target).unwrap(), "personal content");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_external_sourcemap_is_rejected_before_extraction() {
+        let root =
+            std::env::temp_dir().join(format!("rea-fast-sm-external-bound-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("bundle.js"),
+            "//# sourceMappingURL=oversized.map\n",
+        )
+        .unwrap();
+        fs::File::create(root.join("oversized.map"))
+            .unwrap()
+            .set_len(MAX_SOURCE_FILE_BYTES + 1)
+            .unwrap();
+
+        assert!(SourceMapExtractor::extract(&root.join("bundle.js"), &root.join("out")).is_err());
+        assert!(!root.join("out").exists());
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[cfg(unix)]

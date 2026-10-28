@@ -19,9 +19,19 @@
       "blocker": "Concurrent attacker/defender rename test and dirfd/handle-relative hardening not implemented on both platforms"
     },
     {
+      "id": "S2a-bounded-text-readers",
+      "title": "Bound source-text readers and fail closed on partial source or secret scans",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "mcp-text-paths", "argv": ["cargo", "test", "--locked", "mcp::tests::oversized_mcp_text_paths_fail_closed_without_partial_results", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "external-sourcemap", "argv": ["cargo", "test", "--locked", "sourcemap::tests::oversized_external_sourcemap_is_rejected_before_extraction", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
       "id": "S2-bounded-io",
       "title": "Finish repository-wide direct I/O allocation and decompression audit",
-      "depends_on": ["G0-routing-contract"],
+      "depends_on": ["S2a-bounded-text-readers"],
       "platforms": ["linux", "win32"],
       "checks": [],
       "blocker": "Remaining direct readers and resource stress corpus need a complete reviewed inventory"
