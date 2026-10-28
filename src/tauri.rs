@@ -40,6 +40,22 @@ static EMIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:emit|__TAURI_EMIT__)\s*\(\s*["']([a-zA-Z0-9_:-]+)["']"#).unwrap()
 });
 
+/// Heuristic decompression is speculative. Bound the number of probe windows
+/// so a binary full of non-Brotli bytes cannot trigger unbounded CPU work.
+const MAX_BROTLI_PROBES: usize = 64;
+const MAX_TAURI_EXTRACT_BYTES: usize = 128 * 1024 * 1024;
+
+fn claim_asset_bytes(total: &mut usize, next: usize) -> Result<(), Box<dyn Error>> {
+    let new_total = total
+        .checked_add(next)
+        .ok_or("Tauri asset extraction size overflow")?;
+    if new_total > MAX_TAURI_EXTRACT_BYTES {
+        return Err("Tauri cumulative asset extraction exceeds 128 MiB limit".into());
+    }
+    *total = new_total;
+    Ok(())
+}
+
 pub struct TauriScanner;
 
 impl TauriScanner {
@@ -141,6 +157,7 @@ impl TauriScanner {
     ) -> Result<Vec<String>, Box<dyn Error>> {
         let output = security_io::ExtractionRoot::create(out_dir)?;
         let mut extracted = Vec::new();
+        let mut total_extracted_bytes = 0usize;
         let text = String::from_utf8_lossy(bytes);
 
         // Scan for HTML documents
@@ -156,6 +173,7 @@ impl TauriScanner {
                 } else {
                     format!("page_{}.html", html_count)
                 };
+                claim_asset_bytes(&mut total_extracted_bytes, html_content.len())?;
                 std::io::Write::write_all(
                     &mut output.create_new_file(Path::new(&file_name))?,
                     html_content.as_bytes(),
@@ -173,7 +191,15 @@ impl TauriScanner {
         if extracted.is_empty() {
             let mut cursor = 0;
             let mut chunk_id = 0;
+            let mut probes = 0;
             while cursor + 4 < bytes.len() {
+                if probes == MAX_BROTLI_PROBES {
+                    return Err(
+                        "Brotli heuristic probe budget exhausted; asset extraction incomplete"
+                            .into(),
+                    );
+                }
+                probes += 1;
                 // Heuristic probe for brotli decompressed asset
                 let mut decompressed = Vec::new();
                 let sub = &bytes[cursor..std::cmp::min(cursor + 512 * 1024, bytes.len())];
@@ -186,6 +212,7 @@ impl TauriScanner {
                     && (decompressed.starts_with(b"<!DOCTYPE html>")
                         || decompressed.starts_with(b"<html"))
                 {
+                    claim_asset_bytes(&mut total_extracted_bytes, decompressed.len())?;
                     let file_name = format!("brotli_decompressed_{}.html", chunk_id);
                     std::io::Write::write_all(
                         &mut output.create_new_file(Path::new(&file_name))?,
@@ -343,5 +370,34 @@ mod tests {
         );
         assert!(TauriScanner::extract_embedded_assets(fixture, &output).is_err());
         fs::remove_dir_all(&output).unwrap();
+    }
+
+    #[test]
+    fn brotli_heuristic_budget_refuses_to_claim_complete_extraction() {
+        let output = std::env::temp_dir().join(format!(
+            "rea-fast-tauri-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let adversarial = vec![0u8; MAX_BROTLI_PROBES * 4096 + 1024];
+        let error = TauriScanner::extract_embedded_assets(&adversarial, &output)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("probe budget exhausted"), "{error}");
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn cumulative_tauri_output_budget_prevents_disk_expansion() {
+        let mut total = 0;
+        claim_asset_bytes(&mut total, MAX_TAURI_EXTRACT_BYTES - 1).unwrap();
+        assert_eq!(total, MAX_TAURI_EXTRACT_BYTES - 1);
+        let error = claim_asset_bytes(&mut total, 2).err().unwrap().to_string();
+        assert!(error.contains("exceeds 128 MiB"), "{error}");
+        assert_eq!(total, MAX_TAURI_EXTRACT_BYTES - 1);
     }
 }

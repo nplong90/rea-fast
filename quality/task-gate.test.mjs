@@ -55,6 +55,22 @@ test('all checks and dependencies on both platforms and exact SHA permit DONE', 
   assert.equal(combined.next_task, null);
 });
 
+test('cross-platform task may depend on separately verified Linux-only and Windows-only gates', () => {
+  const m = manifest([
+    task('linux-only', { platforms: ['linux'] }),
+    task('windows-only', { platforms: ['win32'] }),
+    task('both', { depends_on: ['linux-only', 'windows-only'] }),
+  ]);
+  const linux = buildLocalReport(m, { platform: 'linux', sha: SHA, executor: success });
+  const windows = buildLocalReport(m, { platform: 'win32', sha: SHA, executor: success });
+  assert.deepEqual(linux.tasks.map((row) => row.status),
+    ['PASS_PLATFORM', 'NOT_APPLICABLE', 'PASS_PLATFORM']);
+  assert.deepEqual(windows.tasks.map((row) => row.status),
+    ['NOT_APPLICABLE', 'PASS_PLATFORM', 'PASS_PLATFORM']);
+  assert.deepEqual(aggregateReports(m, [linux, windows]).tasks.map((row) => row.status),
+    ['DONE', 'DONE', 'DONE']);
+});
+
 test('mixed commits and malformed, incomplete reports are rejected', () => {
   const m = manifest([task('first')]);
   const linux = buildLocalReport(m, { platform: 'linux', sha: SHA, executor: success });

@@ -58,6 +58,7 @@ fn supported(path: &Path) -> bool {
 
 fn collect_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
+    let mut budget = security_io::ProjectBudget::default();
     for entry in WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
@@ -70,6 +71,7 @@ fn collect_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     {
         let entry = entry?;
         if entry.file_type().is_some_and(|t| t.is_file()) && supported(entry.path()) {
+            budget.claim_path(entry.path())?;
             files.push(entry.into_path());
         }
     }
@@ -92,6 +94,10 @@ pub fn analyze_application_files(
             .collect();
         if entries.is_empty() {
             return Err("No JS/TS files found in ASAR".into());
+        }
+        let mut budget = security_io::ProjectBudget::default();
+        for entry in &entries {
+            budget.claim_size(entry.size)?;
         }
         entries
             .par_iter()

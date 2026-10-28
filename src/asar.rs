@@ -17,6 +17,18 @@ use std::os::windows::fs::FileExt;
 const MAX_HEADER_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LISTING_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ASAR_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ASAR_TOTAL_EXTRACT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_ASAR_FILES: usize = 50_000;
+
+fn claim_actual_extraction_bytes(total: u64, next: usize) -> Result<u64, &'static str> {
+    let sum = total
+        .checked_add(next as u64)
+        .ok_or("ASAR actual extraction size overflow")?;
+    if sum > MAX_ASAR_TOTAL_EXTRACT_BYTES {
+        return Err("ASAR actual extraction exceeds 512 MiB limit");
+    }
+    Ok(sum)
+}
 
 /// All ASAR paths should be safe to extract on both Unix and Windows,
 /// regardless of the host platform that originally packaged the archive.
@@ -311,6 +323,12 @@ impl AsarArchive {
                     "unpacked ASAR file grew beyond 64 MiB limit",
                 ));
             }
+            if buffer.len() as u64 != entry.size {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "unpacked ASAR file length disagrees with archive header",
+                ));
+            }
             Ok(buffer)
         } else {
             let data_offset = 8u64
@@ -339,6 +357,15 @@ impl AsarArchive {
         dest_dir: &Path,
         integrity_policy: IntegrityPolicy,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {
+        // Fail before creating any destination if the declared archive would
+        // exhaust disk capacity through many individually bounded entries.
+        let total_declared = self.entries.iter().try_fold(0u64, |sum, entry| {
+            sum.checked_add(entry.size)
+                .ok_or("ASAR cumulative extraction size overflow")
+        })?;
+        if total_declared > MAX_ASAR_TOTAL_EXTRACT_BYTES {
+            return Err("ASAR cumulative extraction exceeds 512 MiB limit".into());
+        }
         // Never reuse a caller-supplied directory: doing so would allow an
         // attacker to replace a checked child parent with a symlink while
         // extraction proceeds. The exclusive root is private on Unix.
@@ -374,6 +401,9 @@ impl AsarArchive {
             }
 
             let bytes = self.read_file(entry)?;
+            // An unpacked sibling may be larger than its header-declared
+            // size. Enforce the true cumulative bytes before every write.
+            let next_total = claim_actual_extraction_bytes(total_bytes, bytes.len())?;
             let observed_hash = format!("{:x}", Sha256::digest(&bytes));
 
             let mut integrity_verified = None;
@@ -416,7 +446,7 @@ impl AsarArchive {
                     .set_permissions(fs::Permissions::from_mode(0o755));
             }
 
-            total_bytes += bytes.len() as u64;
+            total_bytes = next_total;
             extracted_files.push(ExtractedFile {
                 path: entry.path.clone(),
                 size: entry.size,
@@ -444,6 +474,7 @@ static PACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn stream_file_digest(
     path: &Path,
     mut destination: Option<&mut File>,
+    max_bytes: u64,
 ) -> io::Result<(u64, String)> {
     if !fs::symlink_metadata(path)?.file_type().is_file() {
         return Err(io::Error::new(
@@ -461,6 +492,12 @@ fn stream_file_digest(
             format!("ASAR source is not a regular file: {}", path.display()),
         ));
     }
+    if source.metadata()?.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ASAR stream exceeds size limit",
+        ));
+    }
 
     let mut digest = Sha256::new();
     let mut total_bytes = 0u64;
@@ -473,6 +510,12 @@ fn stream_file_digest(
         total_bytes = total_bytes.checked_add(count as u64).ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "ASAR source size overflow")
         })?;
+        if total_bytes > max_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ASAR stream grew beyond size limit",
+            ));
+        }
         digest.update(&buffer[..count]);
         if let Some(output) = destination.as_mut() {
             output.write_all(&buffer[..count])?;
@@ -530,6 +573,9 @@ pub fn pack_asar(
         if entry.file_type().is_some_and(|ft| ft.is_file()) {
             let rel = entry.path().strip_prefix(&canonical_src)?;
             regular_files.push(rel.to_path_buf());
+            if regular_files.len() > MAX_ASAR_FILES {
+                return Err("ASAR packing exceeds 50,000 file limit".into());
+            }
         }
     }
 
@@ -544,7 +590,7 @@ pub fn pack_asar(
         let full_path = canonical_src.join(rel_path);
         #[cfg(unix)]
         let meta = fs::metadata(&full_path)?;
-        let (size, hash) = stream_file_digest(&full_path, None)?;
+        let (size, hash) = stream_file_digest(&full_path, None, MAX_ASAR_TOTAL_EXTRACT_BYTES)?;
 
         let node = serde_json::json!({
             "size": size,
@@ -597,6 +643,9 @@ pub fn pack_asar(
         total_bytes = total_bytes
             .checked_add(size)
             .ok_or("ASAR total size overflow")?;
+        if total_bytes > MAX_ASAR_TOTAL_EXTRACT_BYTES {
+            return Err("ASAR packing exceeds 512 MiB input limit".into());
+        }
     }
 
     let root_json = serde_json::json!({ "files": root_files });
@@ -651,7 +700,8 @@ pub fn pack_asar(
         // Re-check every file's length and digest while copying. If the source
         // changed, do not publish an archive whose header claims stale hashes.
         for (f, expected_size, expected_hash) in &files_to_write {
-            let (observed_size, observed_hash) = stream_file_digest(f, Some(&mut out))?;
+            let (observed_size, observed_hash) =
+                stream_file_digest(f, Some(&mut out), MAX_ASAR_TOTAL_EXTRACT_BYTES)?;
             if observed_size != *expected_size || observed_hash != *expected_hash {
                 return Err(format!("ASAR source changed during packing: {}", f.display()).into());
             }
@@ -666,7 +716,11 @@ pub fn pack_asar(
         return Err(error);
     }
 
-    let (asar_size, asar_sha256) = match stream_file_digest(&temp_path, None) {
+    let (asar_size, asar_sha256) = match stream_file_digest(
+        &temp_path,
+        None,
+        MAX_ASAR_TOTAL_EXTRACT_BYTES + MAX_HEADER_BYTES,
+    ) {
         Ok(fingerprint) => fingerprint,
         Err(error) => {
             let _ = fs::remove_file(&temp_path);
@@ -812,6 +866,93 @@ mod tests {
         fs::remove_dir_all(scope).unwrap();
     }
 
+    #[test]
+    fn cumulative_asar_extraction_limit_is_enforced_before_output_creation() {
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("input.asar");
+        let dest = scope.join("destination");
+        let json = format!(
+            "{{\"files\":{{\"large.bin\":{{\"size\":{},\"offset\":\"0\"}}}}}}",
+            MAX_ASAR_TOTAL_EXTRACT_BYTES + 1
+        );
+        fs::write(&archive_path, make_test_asar(&json, b"tiny")).unwrap();
+        let archive = AsarArchive::open(&archive_path).unwrap();
+        let error = archive
+            .extract_all(&dest, IntegrityPolicy::Fail)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("cumulative extraction exceeds"), "{error}");
+        assert!(!dest.exists());
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn unpacked_asset_must_obey_actual_cumulative_output_limit() {
+        let near_budget = MAX_ASAR_TOTAL_EXTRACT_BYTES - 1;
+        assert_eq!(
+            claim_actual_extraction_bytes(near_budget, 1).unwrap(),
+            MAX_ASAR_TOTAL_EXTRACT_BYTES
+        );
+        assert!(
+            claim_actual_extraction_bytes(near_budget, 2)
+                .err()
+                .unwrap()
+                .contains("actual extraction exceeds")
+        );
+    }
+
+    #[test]
+    fn unpacked_asset_header_length_mismatch_fails_closed() {
+        let scope = isolated_test_dir();
+        let archive_path = scope.join("input.asar");
+        let unpacked_root = scope.join("input.asar.unpacked");
+        fs::create_dir(&unpacked_root).unwrap();
+        fs::write(
+            unpacked_root.join("member.txt"),
+            b"unexpected extra content",
+        )
+        .unwrap();
+        fs::write(
+            &archive_path,
+            make_test_asar(
+                r#"{"files":{"member.txt":{"size":1,"unpacked":true}}}"#,
+                b"",
+            ),
+        )
+        .unwrap();
+
+        let archive = AsarArchive::open(&archive_path).unwrap();
+        let error = archive
+            .read_file(&archive.entries[0])
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("disagrees with archive header"), "{error}");
+        let output = scope.join("output");
+        assert!(archive.extract_all(&output, IntegrityPolicy::Fail).is_err());
+        fs::remove_dir_all(scope).unwrap();
+    }
+
+    #[test]
+    fn asar_packer_rejects_sparse_oversized_input_before_writing_archive() {
+        let scope = isolated_test_dir();
+        let source_dir = scope.join("source");
+        fs::create_dir(&source_dir).unwrap();
+        let oversized = File::create(source_dir.join("oversized.bin")).unwrap();
+        oversized.set_len(MAX_ASAR_TOTAL_EXTRACT_BYTES + 1).unwrap();
+        drop(oversized);
+
+        let archive_path = scope.join("packed.asar");
+        let error = pack_asar(&source_dir, &archive_path)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("exceeds size limit"), "{error}");
+        assert!(!archive_path.exists());
+        fs::remove_dir_all(scope).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn extraction_rejects_symlinked_parent_and_output_file() {
@@ -897,7 +1038,12 @@ mod tests {
         assert_eq!(result.total_files, 1);
         assert_eq!(result.total_bytes, MAX_ASAR_ENTRY_BYTES + 1);
         assert_eq!(fs::metadata(&target).unwrap().len(), result.asar_size);
-        assert_eq!(stream_file_digest(&target, None).unwrap().1, result.sha256);
+        assert_eq!(
+            stream_file_digest(&target, None, MAX_ASAR_TOTAL_EXTRACT_BYTES)
+                .unwrap()
+                .1,
+            result.sha256
+        );
 
         let archive = AsarArchive::open(&target).unwrap();
         assert_eq!(archive.entries[0].size, MAX_ASAR_ENTRY_BYTES + 1);

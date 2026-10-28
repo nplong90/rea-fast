@@ -146,6 +146,9 @@ pub fn inspect_fuses(path: &Path) -> Result<FuseReport, Box<dyn std::error::Erro
         if read == 0 {
             break;
         }
+        if file_offset.saturating_add(read as u64) > MAX_FILE_BYTES {
+            return Err("Electron binary grew beyond 1 GiB scan limit".into());
+        }
         hasher.update(&buf[..read]);
 
         let chunk = &buf[..read];
@@ -156,11 +159,11 @@ pub fn inspect_fuses(path: &Path) -> Result<FuseReport, Box<dyn std::error::Erro
         let carry_len = carry.len();
         for (i, window) in scan_buf.windows(SENTINEL.len()).enumerate() {
             if window == SENTINEL {
+                if sentinel_offsets.len() >= MAX_SENTINELS {
+                    return Err("Electron binary contains too many fuse sentinels".into());
+                }
                 let hit_offset = file_offset + i as u64 - carry_len as u64;
                 sentinel_offsets.push(hit_offset);
-                if sentinel_offsets.len() >= MAX_SENTINELS {
-                    break;
-                }
             }
         }
 
@@ -304,5 +307,27 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(temp);
+    }
+
+    #[test]
+    fn too_many_fuse_sentinels_fail_closed_instead_of_reporting_partial_slice_list() {
+        let temp = std::env::temp_dir().join(format!(
+            "rea-fast-fuses-many-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut f = File::create(&temp).unwrap();
+        f.write_all(b"\x7fELF").unwrap();
+        for _ in 0..=MAX_SENTINELS {
+            f.write_all(SENTINEL).unwrap();
+            f.write_all(&[1, 0]).unwrap();
+        }
+        drop(f);
+        let error = inspect_fuses(&temp).err().unwrap().to_string();
+        assert!(error.contains("too many fuse sentinels"), "{error}");
+        std::fs::remove_file(temp).unwrap();
     }
 }

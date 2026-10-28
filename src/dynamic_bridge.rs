@@ -12,7 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 #[cfg(target_os = "linux")]
-use std::{fs, path::Path};
+use std::{fs, io, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdpTarget {
@@ -77,6 +77,19 @@ pub struct LiveProcessDetail {
 pub struct DynamicBridge;
 
 const MAX_BRIDGE_STREAM_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "linux")]
+const MAX_PROC_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Procfs files commonly report `st_size = 0`; read a limit+1 sentinel and
+/// refuse oversized snapshots instead of silently returning incomplete data.
+#[cfg(target_os = "linux")]
+fn optional_proc_snapshot(path: &Path) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    match crate::security_io::read_limited(path, MAX_PROC_SNAPSHOT_BYTES) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Err(error.into()),
+        Err(_) => Ok(None), // Process exited or access is restricted.
+    }
+}
 
 #[derive(Default)]
 struct BridgeStreamCapture {
@@ -350,7 +363,7 @@ impl DynamicBridge {
                     let name_str = name.to_string_lossy();
                     if let Ok(pid) = name_str.parse::<u32>() {
                         let proc_path = entry.path();
-                        let cmdline = fs::read(proc_path.join("cmdline"))
+                        let cmdline = optional_proc_snapshot(&proc_path.join("cmdline"))?
                             .map(|b| {
                                 b.split(|&c| c == 0)
                                     .filter(|s| !s.is_empty())
@@ -360,9 +373,9 @@ impl DynamicBridge {
                             })
                             .unwrap_or_default();
 
-                        let comm = fs::read_to_string(proc_path.join("comm"))
-                            .map(|s| s.trim().to_string())
-                            .unwrap_or_else(|_| name_str.to_string());
+                        let comm = optional_proc_snapshot(&proc_path.join("comm"))?
+                            .map(|s| String::from_utf8_lossy(&s).trim().to_string())
+                            .unwrap_or_else(|| name_str.to_string());
 
                         if let Some(f) = filter
                             && !comm.to_lowercase().contains(&f.to_lowercase())
@@ -383,8 +396,18 @@ impl DynamicBridge {
 
         #[cfg(not(target_os = "linux"))]
         {
-            let output = Command::new("ps").args(["-e", "-o", "pid,comm"]).output()?;
-            let text = String::from_utf8_lossy(&output.stdout);
+            let response = Self::run_optional_bridge(
+                "ps",
+                "Install a ps-compatible process lister",
+                &["-e", "-o", "pid,comm"],
+                10,
+            );
+            if response["status"] != "ok" {
+                return Err(format!("Process listing did not complete: {response}").into());
+            }
+            let text = response["stdout"]
+                .as_str()
+                .ok_or("Process listing missing stdout")?;
             for line in text.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 2
@@ -419,11 +442,11 @@ impl DynamicBridge {
                 return Err(format!("Process {} not found", pid).into());
             }
 
-            let name = fs::read_to_string(proc_path.join("comm"))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| format!("pid_{}", pid));
+            let name = optional_proc_snapshot(&proc_path.join("comm"))?
+                .map(|s| String::from_utf8_lossy(&s).trim().to_string())
+                .unwrap_or_else(|| format!("pid_{}", pid));
 
-            let cmdline: Vec<String> = fs::read(proc_path.join("cmdline"))
+            let cmdline: Vec<String> = optional_proc_snapshot(&proc_path.join("cmdline"))?
                 .map(|b| {
                     b.split(|&c| c == 0)
                         .filter(|s| !s.is_empty())
@@ -442,7 +465,8 @@ impl DynamicBridge {
             let mut memory_vmsize_kb = None;
             let mut memory_vmrss_kb = None;
 
-            if let Ok(status) = fs::read_to_string(proc_path.join("status")) {
+            if let Some(status) = optional_proc_snapshot(&proc_path.join("status"))? {
+                let status = String::from_utf8_lossy(&status);
                 for line in status.lines() {
                     let parts: Vec<&str> = line.splitn(2, ':').collect();
                     if parts.len() == 2 {
@@ -472,13 +496,15 @@ impl DynamicBridge {
 
             // Extract mapped dynamic libraries from /proc/{pid}/maps
             let mut mapped_libraries = Vec::new();
-            if let Ok(maps) = fs::read_to_string(proc_path.join("maps")) {
+            let mut seen_libraries = std::collections::HashSet::new();
+            if let Some(maps) = optional_proc_snapshot(&proc_path.join("maps"))? {
+                let maps = String::from_utf8_lossy(&maps);
                 for line in maps.lines() {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 6 {
                         let path = parts[5];
                         if (path.ends_with(".so") || path.contains(".so."))
-                            && !mapped_libraries.contains(&path.to_string())
+                            && seen_libraries.insert(path)
                         {
                             mapped_libraries.push(path.to_string());
                         }
@@ -807,6 +833,29 @@ mod tests {
         let capture = capture_bridge_stream(std::io::Cursor::new(data));
         assert_eq!(capture.bytes.len(), MAX_BRIDGE_STREAM_BYTES);
         assert!(capture.truncated);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn oversized_proc_snapshot_fails_closed_and_real_procfs_zero_size_reads_work() {
+        let path = std::env::temp_dir().join(format!(
+            "rea-fast-proc-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_PROC_SNAPSHOT_BYTES + 1).unwrap();
+        drop(file);
+        let error = optional_proc_snapshot(&path).err().unwrap().to_string();
+        assert!(error.contains("exceeds"), "{error}");
+        fs::remove_file(&path).unwrap();
+
+        let live = Path::new("/proc/self/comm");
+        assert_eq!(fs::metadata(live).unwrap().len(), 0);
+        assert!(!optional_proc_snapshot(live).unwrap().unwrap().is_empty());
     }
 
     #[cfg(unix)]

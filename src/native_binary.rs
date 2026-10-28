@@ -992,10 +992,13 @@ impl NativeInspector {
         for cmd in &[
             "adb", "gdb", "rizin", "frida", "objdump", "tshark", "jadx", "apktool", "strings",
         ] {
+            // This probe needs only the exit status, never the child output.
             let available = std::process::Command::new("which")
                 .arg(cmd)
-                .output()
-                .map(|o| o.status.success())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
                 .unwrap_or(false);
             if available {
                 available_tools.push(cmd.to_string());

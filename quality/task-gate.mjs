@@ -118,7 +118,10 @@ export function buildLocalReport(manifest, options = {}) {
     } else if (task.blocker) {
       status = 'BLOCKED';
       blocker = task.blocker;
-    } else if (task.depends_on.some((id) => statuses.get(id) !== 'PASS_PLATFORM')) {
+    } else if (task.depends_on.some((id) => {
+      const dependency = ordered.find((candidate) => candidate.id === id);
+      return dependency.platforms.includes(platform) && statuses.get(id) !== 'PASS_PLATFORM';
+    })) {
       status = 'BLOCKED_DEPENDENCY';
       blocker = 'One or more dependencies have not passed on this platform';
     } else {

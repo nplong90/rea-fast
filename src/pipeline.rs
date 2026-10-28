@@ -121,6 +121,7 @@ fn is_supported_js_ts(path: &Path) -> bool {
 
 fn collect_js_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
+    let mut budget = security_io::ProjectBudget::default();
     for entry in WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
@@ -133,6 +134,7 @@ fn collect_js_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     {
         let entry = entry?;
         if entry.file_type().is_some_and(|t| t.is_file()) && is_supported_js_ts(entry.path()) {
+            budget.claim_path(entry.path())?;
             files.push(entry.into_path());
         }
     }

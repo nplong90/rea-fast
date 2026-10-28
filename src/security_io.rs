@@ -15,6 +15,38 @@ use std::{
 
 pub const MAX_ANALYSIS_FILE_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_SOURCE_FILE_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_PROJECT_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_PROJECT_FILES: usize = 50_000;
+
+/// Prevent directory-wide analyses from allocating unbounded per-file results
+/// even when every individual input obeys its own read limit.
+#[derive(Default)]
+pub struct ProjectBudget {
+    files: usize,
+    bytes: u64,
+}
+
+impl ProjectBudget {
+    pub fn claim_size(&mut self, size: u64) -> io::Result<()> {
+        self.files = self.files.checked_add(1).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Project file count overflow")
+        })?;
+        self.bytes = self.bytes.checked_add(size).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "Project byte count overflow")
+        })?;
+        if self.files > MAX_PROJECT_FILES || self.bytes > MAX_PROJECT_INPUT_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Project exceeds 50,000 files or 512 MiB input budget",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn claim_path(&mut self, path: &Path) -> io::Result<()> {
+        self.claim_size(fs::metadata(path)?.len())
+    }
+}
 
 pub fn read_limited(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
     let file = File::open(path)?;
@@ -183,6 +215,42 @@ mod tests {
             io::ErrorKind::InvalidData
         );
         fs::remove_file(&base).unwrap();
+    }
+
+    #[test]
+    fn project_budget_rejects_many_small_files_and_large_total() {
+        let mut file_count = ProjectBudget::default();
+        for _ in 0..MAX_PROJECT_FILES {
+            file_count.claim_size(0).unwrap();
+        }
+        assert!(
+            file_count
+                .claim_size(0)
+                .unwrap_err()
+                .to_string()
+                .contains("50,000 files")
+        );
+
+        let mut byte_count = ProjectBudget::default();
+        byte_count.claim_size(MAX_PROJECT_INPUT_BYTES).unwrap();
+        assert!(
+            byte_count
+                .claim_size(1)
+                .unwrap_err()
+                .to_string()
+                .contains("512 MiB")
+        );
+    }
+
+    #[test]
+    fn project_budget_rejects_sparse_file_without_allocating_contents() {
+        let input = fresh_test_path("project-budget");
+        let file = File::create(&input).unwrap();
+        file.set_len(MAX_PROJECT_INPUT_BYTES + 1).unwrap();
+        drop(file);
+        let error = ProjectBudget::default().claim_path(&input).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        fs::remove_file(input).unwrap();
     }
 
     #[test]

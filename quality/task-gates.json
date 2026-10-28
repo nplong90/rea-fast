@@ -45,12 +45,31 @@
       ]
     },
     {
+      "id": "S2c-proc-snapshot",
+      "title": "Bound Linux procfs snapshots despite st_size=0",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux"],
+      "checks": [
+        { "name": "procfs-growing-and-zero-length", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::oversized_proc_snapshot_fails_closed_and_real_procfs_zero_size_reads_work", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
       "id": "S2-bounded-io",
       "title": "Finish repository-wide direct I/O allocation and decompression audit",
-      "depends_on": ["S2a-bounded-text-readers", "S2b-http-response-bounds"],
+      "depends_on": ["S2a-bounded-text-readers", "S2b-http-response-bounds", "S2c-proc-snapshot"],
       "platforms": ["linux", "win32"],
-      "checks": [],
-      "blocker": "Remaining direct readers and resource stress corpus need a complete reviewed inventory"
+      "checks": [
+        { "name": "direct-io-drift-inventory", "argv": ["node", "quality/io-audit.mjs"], "expect_stdout": "Verified direct I/O inventory" },
+        { "name": "project-file-and-byte-budget", "argv": ["cargo", "test", "--locked", "security_io::tests::project_budget_rejects_many_small_files_and_large_total", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "project-sparse-input", "argv": ["cargo", "test", "--locked", "security_io::tests::project_budget_rejects_sparse_file_without_allocating_contents", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-extraction-total", "argv": ["cargo", "test", "--locked", "asar::tests::cumulative_asar_extraction_limit_is_enforced_before_output_creation", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-unpacked-real-bytes", "argv": ["cargo", "test", "--locked", "asar::tests::unpacked_asset_must_obey_actual_cumulative_output_limit", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-unpacked-header-mismatch", "argv": ["cargo", "test", "--locked", "asar::tests::unpacked_asset_header_length_mismatch_fails_closed", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-pack-sparse-oversize", "argv": ["cargo", "test", "--locked", "asar::tests::asar_packer_rejects_sparse_oversized_input_before_writing_archive", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "fuses-excess-fail-closed", "argv": ["cargo", "test", "--locked", "fuses::tests::too_many_fuse_sentinels_fail_closed_instead_of_reporting_partial_slice_list", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-brotli-probe-budget", "argv": ["cargo", "test", "--locked", "tauri::tests::brotli_heuristic_budget_refuses_to_claim_complete_extraction", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-total-output-budget", "argv": ["cargo", "test", "--locked", "tauri::tests::cumulative_tauri_output_budget_prevents_disk_expansion", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
     },
     {
       "id": "S3-unix-process-tree",
