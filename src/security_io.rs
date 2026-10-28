@@ -53,13 +53,17 @@ pub fn create_private_output_directory(output: &Path) -> io::Result<()> {
             ));
         }
     }
-    let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
+        let mut builder = fs::DirBuilder::new();
         builder.mode(0o700);
+        builder.create(output)
     }
-    builder.create(output)
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(output)
+    }
 }
 
 /// Creates only plain subdirectories below a newly created private root.

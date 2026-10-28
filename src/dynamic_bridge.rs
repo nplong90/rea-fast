@@ -128,6 +128,21 @@ fn stop_bridge_process_tree(child: &mut std::process::Child) {
 }
 
 impl DynamicBridge {
+    /// All ADB queries share the bounded, timeout-aware provider process path.
+    /// Returning an error on truncated output/nonzero exit prevents a partial
+    /// device inventory from being promoted to complete evidence.
+    fn adb_stdout(arguments: &[&str]) -> Result<String, Box<dyn Error>> {
+        let response =
+            Self::run_optional_bridge("adb", "Install Android platform-tools", arguments, 30);
+        if response["status"] != "ok" {
+            return Err(format!("ADB query did not complete: {response}").into());
+        }
+        response["stdout"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "ADB query missing stdout".into())
+    }
+
     // ==========================================
     // Chrome DevTools Protocol (CDP) Bridge
     // ==========================================
@@ -182,14 +197,9 @@ impl DynamicBridge {
 
     /// List connected Android devices via `adb devices -l`
     pub fn list_adb_devices() -> Result<Vec<AdbDevice>, Box<dyn Error>> {
-        let output = Command::new("adb").args(["devices", "-l"]).output()?;
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("adb failed: {}", err).into());
-        }
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse_adb_devices_output(&text))
+        Ok(Self::parse_adb_devices_output(&Self::adb_stdout(&[
+            "devices", "-l",
+        ])?))
     }
 
     pub fn parse_adb_devices_output(output: &str) -> Vec<AdbDevice> {
@@ -237,15 +247,13 @@ impl DynamicBridge {
 
     /// Read system properties from device via `adb shell getprop`
     pub fn inspect_adb_device(serial: Option<&str>) -> Result<AdbDeviceProps, Box<dyn Error>> {
-        let mut cmd = Command::new("adb");
+        let mut arguments = Vec::new();
         if let Some(s) = serial {
-            cmd.args(["-s", s]);
+            arguments.extend(["-s", s]);
         }
-        cmd.args(["shell", "getprop"]);
+        arguments.extend(["shell", "getprop"]);
 
-        let output = cmd.output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let props = Self::parse_getprop_output(&text);
+        let props = Self::parse_getprop_output(&Self::adb_stdout(&arguments)?);
 
         let android_version = props.get("ro.build.version.release").cloned();
         let sdk_version = props.get("ro.build.version.sdk").cloned();
@@ -304,17 +312,15 @@ impl DynamicBridge {
         serial: Option<&str>,
         third_party_only: bool,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut cmd = Command::new("adb");
+        let mut arguments = Vec::new();
         if let Some(s) = serial {
-            cmd.args(["-s", s]);
+            arguments.extend(["-s", s]);
         }
-        cmd.arg("shell").arg("pm").arg("list").arg("packages");
+        arguments.extend(["shell", "pm", "list", "packages"]);
         if third_party_only {
-            cmd.arg("-3");
+            arguments.push("-3");
         }
-
-        let output = cmd.output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
+        let text = Self::adb_stdout(&arguments)?;
         let mut pkgs = Vec::new();
         for line in text.lines() {
             let line = line.trim();

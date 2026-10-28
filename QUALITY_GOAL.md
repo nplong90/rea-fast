@@ -80,6 +80,9 @@ based on tool counts or synthetic stub responses.
   outputs and refuse existing paths; added symlink/no-clobber regressions.
 - Added bounded file readers, 16 MiB Rust metadata decompression guard, and
   1 MiB per-stream external CLI output cap with explicit failure semantics.
+- Routed ADB device/property/package queries through the same capped,
+  timeout-aware child process path; do not accept partial provider inventories.
+- Fixed a Windows-only Clippy failure from Unix-scoped directory permissions.
 - All 63 native-labeled catalog routes now have black-box MCP route fixtures
   (up from 31). Some deliberately test negative classification, header-level
   parsing, or partial reports; **these are not full positive format coverage**.
