@@ -139,7 +139,7 @@ impl TauriScanner {
         bytes: &[u8],
         out_dir: &Path,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        security_io::create_private_output_directory(out_dir)?;
+        let output = security_io::ExtractionRoot::create(out_dir)?;
         let mut extracted = Vec::new();
         let text = String::from_utf8_lossy(bytes);
 
@@ -156,9 +156,8 @@ impl TauriScanner {
                 } else {
                     format!("page_{}.html", html_count)
                 };
-                let out_file = out_dir.join(&file_name);
                 std::io::Write::write_all(
-                    &mut security_io::create_new_file(&out_file)?,
+                    &mut output.create_new_file(Path::new(&file_name))?,
                     html_content.as_bytes(),
                 )?;
                 extracted.push(file_name);
@@ -189,7 +188,7 @@ impl TauriScanner {
                 {
                     let file_name = format!("brotli_decompressed_{}.html", chunk_id);
                     std::io::Write::write_all(
-                        &mut security_io::create_new_file(&out_dir.join(&file_name))?,
+                        &mut output.create_new_file(Path::new(&file_name))?,
                         &decompressed,
                     )?;
                     extracted.push(file_name);
@@ -280,6 +279,8 @@ impl TauriScanner {
 mod tests {
     use super::*;
 
+    use std::fs;
+
     #[test]
     fn test_detect_tauri_and_ipc() {
         let sample = r#"
@@ -319,5 +320,28 @@ mod tests {
         assert!(cfg.is_some());
         let val = cfg.unwrap();
         assert_eq!(val["tauri"]["windows"][0]["title"], "App");
+    }
+
+    #[test]
+    fn extracted_assets_use_exclusive_output_capability() {
+        let output = std::env::temp_dir().join(format!(
+            "rea-fast-tauri-out-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let fixture = b"prefix<!DOCTYPE html><html><body>safe</body></html>suffix";
+        assert_eq!(
+            TauriScanner::extract_embedded_assets(fixture, &output).unwrap(),
+            vec!["index.html"]
+        );
+        assert_eq!(
+            fs::read(output.join("index.html")).unwrap(),
+            b"<!DOCTYPE html><html><body>safe</body></html>"
+        );
+        assert!(TauriScanner::extract_embedded_assets(fixture, &output).is_err());
+        fs::remove_dir_all(&output).unwrap();
     }
 }

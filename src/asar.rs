@@ -40,43 +40,6 @@ fn portable_asar_component(name: &str) -> bool {
             .any(|word| stem.eq_ignore_ascii_case(word))
 }
 
-/// Reject symlinks anywhere below the selected extraction root. Lexical path
-/// containment alone does not prevent an existing `subdir` symlink from
-/// redirecting writes outside that root.
-fn ensure_plain_subdirectories(root: &Path, rel_parent: &Path) -> io::Result<()> {
-    let mut current = root.to_path_buf();
-    for component in rel_parent.components() {
-        let Component::Normal(name) = component else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "unsafe ASAR parent path",
-            ));
-        };
-        current.push(name);
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!(
-                        "ASAR extraction parent is not a plain directory: {}",
-                        current.display()
-                    ),
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&current)?,
-            Err(error) => return Err(error),
-        }
-    }
-    if current.canonicalize()? != current {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "ASAR extraction parent resolves through a symlink",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum IntegrityPolicy {
@@ -379,7 +342,7 @@ impl AsarArchive {
         // Never reuse a caller-supplied directory: doing so would allow an
         // attacker to replace a checked child parent with a symlink while
         // extraction proceeds. The exclusive root is private on Unix.
-        crate::security_io::create_private_output_directory(dest_dir)?;
+        let output = crate::security_io::ExtractionRoot::create(dest_dir)?;
         let canonical_dest = dest_dir.canonicalize()?;
 
         let mut extracted_files = Vec::new();
@@ -409,9 +372,6 @@ impl AsarArchive {
                     format!("Path traversal escape detected for entry: {}", entry.path).into(),
                 );
             }
-
-            let rel_parent = rel_path.parent().unwrap_or_else(|| Path::new(""));
-            ensure_plain_subdirectories(&canonical_dest, rel_parent)?;
 
             let bytes = self.read_file(entry)?;
             let observed_hash = format!("{:x}", Sha256::digest(&bytes));
@@ -446,15 +406,14 @@ impl AsarArchive {
 
             // Exclusive creation refuses existing files and leaf symlinks;
             // extraction must never truncate a pre-existing user file.
-            let mut out_file = File::options()
-                .write(true)
-                .create_new(true)
-                .open(&target_path)?;
+            let mut out_file = output.create_new_file(rel_path)?;
             out_file.write_all(&bytes)?;
 
             #[cfg(unix)]
             if entry.executable {
-                let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755));
+                let _ = out_file
+                    .into_std()
+                    .set_permissions(fs::Permissions::from_mode(0o755));
             }
 
             total_bytes += bytes.len() as u64;

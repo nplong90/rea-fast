@@ -154,18 +154,12 @@ impl SourceRecoverer {
         let (bundler, raw_modules, mut warnings) =
             self.detect_and_extract_modules(&source, input_path);
 
-        security_io::create_private_output_directory(output_directory)?;
+        let output = security_io::ExtractionRoot::create(output_directory)?;
 
         let mut recovered = Vec::new();
 
         for (idx, raw) in raw_modules.iter().enumerate() {
             let rel_path = sanitize_module_path(&raw.id, idx);
-            let target_path = output_directory.join(&rel_path);
-
-            security_io::ensure_plain_parents(
-                output_directory,
-                rel_path.parent().unwrap_or_else(|| Path::new("")),
-            )?;
 
             let start = raw.body_span.start as usize;
             let end = raw.body_span.end as usize;
@@ -185,7 +179,7 @@ impl SourceRecoverer {
             let hash = sha256_hex(bytes);
             let size = bytes.len();
 
-            let mut f = security_io::create_new_file(&target_path)?;
+            let mut f = output.create_new_file(&rel_path)?;
             f.write_all(bytes)?;
 
             recovered.push(RecoveredModule {
@@ -211,7 +205,7 @@ impl SourceRecoverer {
         };
 
         let manifest_bytes = serde_json::to_vec_pretty(&result)?;
-        let mut mf = security_io::create_new_file(&manifest_path)?;
+        let mut mf = output.create_new_file(Path::new("manifest.json"))?;
         mf.write_all(&manifest_bytes)?;
 
         Ok(result)

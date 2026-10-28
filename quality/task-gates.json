@@ -15,8 +15,15 @@
       "title": "Prove extraction cannot escape a private root during concurrent renames",
       "depends_on": ["G0-routing-contract"],
       "platforms": ["linux", "win32"],
-      "checks": [],
-      "blocker": "Concurrent attacker/defender rename test and dirfd/handle-relative hardening not implemented on both platforms"
+      "checks": [
+        { "name": "concurrent-directory-swap", "argv": ["cargo", "test", "--locked", "security_io::tests::concurrent_directory_swap_cannot_escape_extraction_capability", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "visible-root-swap", "argv": ["cargo", "test", "--locked", "security_io::tests::replacing_visible_root_after_open_cannot_redirect_writes", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "exclusive-output", "argv": ["cargo", "test", "--locked", "security_io::tests::exclusive_outputs_never_clobber", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-extraction", "argv": ["cargo", "test", "--locked", "asar::tests::extracts_all_with_integrity_and_contradictions", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "bundle-extraction", "argv": ["cargo", "test", "--locked", "bundle::tests::unbundles_webpack_jsonp_push", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "sourcemap-extraction", "argv": ["cargo", "test", "--locked", "sourcemap::tests::extracts_sourcemap_v3_json", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-extraction", "argv": ["cargo", "test", "--locked", "tauri::tests::extracted_assets_use_exclusive_output_capability", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
     },
     {
       "id": "S2a-bounded-text-readers",

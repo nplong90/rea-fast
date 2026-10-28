@@ -158,7 +158,7 @@ impl SourceMapExtractor {
         if requested_bytes > MAX_SOURCE_FILE_BYTES {
             return Err("SourceMap extracted content exceeds source-size limit".into());
         }
-        security_io::create_private_output_directory(output_dir)?;
+        let output = security_io::ExtractionRoot::create(output_dir)?;
 
         if let Some(contents) = &sm.sources_content {
             for (idx, source_path) in sm.sources.iter().enumerate() {
@@ -172,19 +172,13 @@ impl SourceMapExtractor {
                 };
 
                 let rel_path = sanitize_source_path(source_path, idx);
-                let target_path = output_dir.join(&rel_path);
-
-                security_io::ensure_plain_parents(
-                    output_dir,
-                    rel_path.parent().unwrap_or_else(|| Path::new("")),
-                )?;
 
                 let bytes = content_str.as_bytes();
                 let hash = sha256_hex(bytes);
                 let size = bytes.len();
                 total_bytes += size;
 
-                let mut f = security_io::create_new_file(&target_path)?;
+                let mut f = output.create_new_file(&rel_path)?;
                 f.write_all(bytes)?;
 
                 extracted_files.push(ExtractedSource {
