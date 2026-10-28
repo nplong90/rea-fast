@@ -76,7 +76,9 @@ if (process.argv.includes('--write')) {
   writeFileSync(path, output);
   console.log(`Wrote ${entries.length} routes to ${path}`);
 } else if (process.argv.includes('--check')) {
-  assert.equal(readFileSync(path, 'utf8'), output, 'Route contract is stale; regenerate with --write');
+  // Git's text checkout may convert LF to CRLF on Windows. Compare the
+  // logical manifest without relaxing any JSON/tool contract differences.
+  assert.equal(readFileSync(path, 'utf8').replace(/\r\n/g, '\n'), output, 'Route contract is stale; regenerate with --write');
   console.log(`Verified ${entries.length} versioned contracts`);
 } else {
   throw new Error('Usage: node tests/acceptance/contracts.mjs --write|--check');
