@@ -81,6 +81,31 @@ function record(name) {
   entry.runtime = 'fixture_exercised';
   entry.proof = 'real_mcp_process_assertions';
 }
+function storedZip(name, content) {
+  const filename = Buffer.from(name);
+  const local = Buffer.alloc(30);
+  local.write('PK\x03\x04', 0, 'binary');
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(content.length, 18);
+  local.writeUInt32LE(content.length, 22);
+  local.writeUInt16LE(filename.length, 26);
+
+  const central = Buffer.alloc(46);
+  central.write('PK\x01\x02', 0, 'binary');
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(content.length, 20);
+  central.writeUInt32LE(content.length, 24);
+  central.writeUInt16LE(filename.length, 28);
+
+  const eocd = Buffer.alloc(22);
+  eocd.write('PK\x05\x06', 0, 'binary');
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(central.length + filename.length, 12);
+  eocd.writeUInt32LE(local.length + filename.length + content.length, 16);
+  return Buffer.concat([local, filename, content, central, filename, eocd]);
+}
 try {
   const listed = await rpc('tools/list', {});
   assert.equal(listed.result?.tools?.length, 245, 'Full MCP catalog must have 245 entries');
@@ -149,6 +174,30 @@ try {
   await call('inspect_byte_entropy', { path: fixture }, (v) => {
     assert.equal(v.total_bytes, sample.length);
   }); record('inspect_byte_entropy');
+  const dex = Buffer.from('dex\nacceptance-fixture APK Sig Block 42 should not count as signing');
+  const apk = join(dir, 'minimal.apk');
+  const stored = storedZip('classes.dex', dex);
+  writeFileSync(apk, stored);
+  await call('inspect_android_package', { path: apk }, (v) => {
+    assert.equal(v.total_files, 1);
+    assert.equal(v.dex_files.length, 1);
+    assert.equal(v.dex_files[0].size, dex.length);
+    assert.equal(v.dex_files[0].sha256, createHash('sha256').update(dex).digest('hex'));
+  }); record('inspect_android_package');
+  await call('inspect_apk_signature', { path: apk }, (v) => {
+    assert.equal(v.has_v2_or_v3_signing, false, 'String in DEX must not forge signing block');
+    assert.deepEqual(v.detected_scheme_ids, []);
+    assert.equal(v.signature_cryptographic_verification, 'not_performed');
+  }); record('inspect_apk_signature');
+  // A malformed local header must fail closed; no fabricated empty DEX hash.
+  const malformed = Buffer.from(stored);
+  malformed.writeUInt16LE(8, 8); // local method disagrees with central method 0
+  const brokenApk = join(dir, 'broken.apk');
+  writeFileSync(brokenApk, malformed);
+  const refused = await rpc('tools/call', { name: 'inspect_android_package', arguments: { path: brokenApk } });
+  assert.equal(refused.error, undefined);
+  assert.equal(refused.result?.isError, true, 'Malicious APK must not be reported as a success');
+  assert.match(refused.result.content[0].text, /ZIP local and central compression methods disagree/);
   await call('list_strings', { path: fixture }, (v) => {
     assert.ok(v.strings.some((x) => x.includes('ACCEPTANCE_MATRIX_STRING_12345')));
   }); record('list_strings');
@@ -223,7 +272,7 @@ try {
     assert.equal(v.total_symbols, v.symbols.length);
   }); record('list_names');
   assert.equal(rows.length, 245);
-  assert.equal(verified.length, 30, '30 fixture executions expected');
+  assert.equal(verified.length, 32, '32 successful fixture executions expected');
 } catch (e) {
   failure = String(e.stack ?? e);
   process.exitCode = 1;

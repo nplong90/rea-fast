@@ -41,7 +41,7 @@
 | --- | --- | --- | --- |
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
-| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — 245 conservative route labels and a verified MCP Electron-source route |
+| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — 245 conservative route labels; 31 catalog routes now fixture-exercised via MCP (not parity-certified) |
 | P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS, ASAR and Electron static subsets matched against real upstream |
 | P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | In progress — bounded MCP stdio requests, parser mutation tests |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
@@ -394,3 +394,29 @@ based on tool counts or synthetic stub responses.
 - Regression fixture uses 16,384 one-byte chunks and asserts the true count,
   output cap and offsets; resource-allocation pressure no longer follows
   the total number of result chunks.
+
+### 2026-10-28 — fail-closed Android APK ZIP and signature inspection
+
+- Bound file reads for three APK entrypoints to 256 MiB, actual ZIP member
+  inflation to 64 MiB, and declared ZIP total uncompressed bytes to 512 MiB.
+  Reject malformed central-directory extents/counts, ZIP64 and multi-disk
+  containers rather than returning plausible partial inventories.
+- Verify DEX/AndroidManifest member decompression succeeds and its byte length
+  matches the directory claim. A corrupt DEX no longer receives an invented
+  SHA-256 for an empty byte array. Reject inconsistent local/central member
+  names and compression methods.
+- Detect v2/v3 APK signature *block IDs* only when located immediately before
+  the ZIP Central Directory, with matching size fields and valid pair framing.
+  Reject a fake `APK Sig Block 42` string embedded inside ordinary member data.
+  Report `signature_cryptographic_verification: not_performed`; no signature
+  authenticity, signer identity, certificate chain or content digest is
+  cryptographically verified by this static inspector.
+- Added eight targeted Rust regression fixtures (including 65 MiB expansion
+  bomb, 256 MiB+1 sparse APK, malformed ZIP and forged signature marker), plus
+  real MCP acceptance calls for `inspect_android_package` and
+  `inspect_apk_signature`. Assertions independently check DEX SHA-256,
+  reject a forged signing string, and require corrupt APKs to yield
+  `isError: true`. The catalog matrix now exercises 31 of 245 routes with
+  fixtures, plus one additional callable route. **214 catalog routes remain
+  unverified**;
+  upstream Android APK task parity is still unverified.
