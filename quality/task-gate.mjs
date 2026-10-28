@@ -74,7 +74,9 @@ function currentSha() {
 function runCheck(check, platform, executor) {
   const targetRoot = resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
   const binary = join(targetRoot, 'debug', platform === 'win32' ? 'rea-fast.exe' : 'rea-fast');
-  const argv = check.argv.map((part) => part.replaceAll('${REA_FAST_BIN}', binary));
+  const argv = check.argv.map((part) => part
+    .replaceAll('${REA_FAST_BIN}', binary)
+    .replaceAll('${REA_UPSTREAM_DIR}', process.env.REA_UPSTREAM_DIR ?? ''));
   const result = executor(argv[0], argv.slice(1), {
     cwd: root, encoding: 'utf8', timeout: 180000, maxBuffer: 2 * 1024 * 1024,
     shell: false, windowsHide: true,

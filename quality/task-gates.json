@@ -109,11 +109,15 @@
     },
     {
       "id": "E1-upstream-semantics",
-      "title": "Prove matched upstream semantics for every claimed equivalent subsystem",
+      "title": "Prove pinned upstream parity only for explicitly advertised observable subsets",
       "depends_on": ["C1-mcp-native-routing"],
       "platforms": ["linux"],
-      "checks": [],
-      "blocker": "Pinned JS subset passes; complete Electron Evidence, ASAR, native and mobile comparison is still missing"
+      "checks": [
+        { "name": "upstream-js-facts", "argv": ["node", "tests/parity/compare-js.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-asar-container", "argv": ["node", "tests/parity/compare-asar.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-electron-static-ipc", "argv": ["node", "tests/parity/compare-electron.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-native-mobile-root-facts", "argv": ["node", "tests/parity/compare-native-mobile.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" }
+      ]
     },
     {
       "id": "F1-adversarial-corpus",

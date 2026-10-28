@@ -85,6 +85,29 @@ reconstruct an equivalent graph. On this fixture, upstream produced 25 nodes
 and 33 edges. Matching the normalized syntax facts does **not** prove IPC
 reachability, preload ownership, sender security or execution equivalence.
 
+## Native ELF and Android APK container fixture
+
+`compare-native-mobile.mjs` runs the actual `inspect-artifact` commands in
+both implementations on a host ELF executable (`/usr/bin/true`) and a
+deterministically assembled, structurally valid APK/ZIP with a manifest and
+one DEX member. It checks independent SHA-256 values and file lengths,
+requires a complete upstream ZIP-member inventory, and separately asserts
+Rust's DEX-member content hash. It does **not** compare deep native symbols,
+Android manifest interpretation, execution, device/ADB behavior or full
+Evidence provenance; none of these may be advertised as upstream-equivalent.
+
+```sh
+node tests/parity/compare-native-mobile.mjs \
+  --rust-bin "$(pwd)/target/debug/rea-fast" \
+  --upstream /absolute/path/to/pinned/rea
+```
+
+The E1 atomic Linux gate runs all four comparators (JS, ASAR, Electron,
+native/mobile) with a checkout of the exact upstream SHA, using their real
+nonzero exit codes to fail CI on mismatches or incomplete evidence. Windows
+support is tested through independent Rust/MCP gates; E1 compares against
+the Linux-pinned upstream only, not Windows behavioral equivalence.
+
 ## Matched-task benchmark (opt-in, Linux)
 
 `tests/benchmark/run-js.mjs` invokes **both actual executables** on the

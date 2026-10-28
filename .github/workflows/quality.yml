@@ -58,8 +58,31 @@ jobs:
           extension=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
           node tests/acceptance/provider-offline.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/provider-offline-${{ runner.os }}.json"
+      - name: Checkout pinned upstream REA for semantic gate
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: morluto/rea
+          ref: 6de60993b861266e63a4e70d5c6d9a8073f7cd92
+          path: pinned-upstream
+          persist-credentials: false
+      - name: Set up pinned Node for semantic gate
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Install pinned upstream dependencies for semantic gate
+        if: runner.os == 'Linux'
+        working-directory: pinned-upstream
+        run: npm ci --no-audit --no-fund
+      - name: Build actual upstream implementation for semantic gate
+        if: runner.os == 'Linux'
+        working-directory: pinned-upstream
+        run: npm run build
       - name: Record atomic same-commit acceptance receipts
         shell: bash
+        env:
+          REA_UPSTREAM_DIR: ${{ github.workspace }}/pinned-upstream
         run: node quality/task-gate.mjs --run --strict --output "acceptance-artifacts/task-gate-${{ runner.os }}.json"
       - name: Upload 245-tool acceptance evidence
         if: always()

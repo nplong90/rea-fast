@@ -1,69 +1,35 @@
 # rea-fast PR #1 — merge-readiness execution plan
 
-## Atomic execution ledger — 2026-10-28, goal-driven gate update
+## Atomic execution ledger — 2026-10-28
 
-This update is **not an M1 signoff**. `quality/task-gates.json` and its
-runner replace ambiguous aggregate “2/5 passed” reporting with 12 individually
-tracked tasks, each with dependencies and required OS evidence on the **same
-commit**. Blockers stay open until implemented and proven; a Linux pass cannot
-silently complete a Windows gate. No daily schedule or auto-merge.
+The merger goal is **not complete**. All 15 atomic tasks are versioned in
+`quality/task-gates.json` with executable checks, required platforms and
+explicit unfinished blockers. Only a same-commit Linux + Windows receipt can
+make a cross-platform task DONE. There is no recurring schedule or auto-merge.
 
-- Gate runner: 7 Node unit cases (including mixed-commit, absent platform,
-  subprocess error, blocked dependency and explicit blocker), manifest drift
-  validation, and real local G0 route-contract pass for all 245 entries.
-- S3: strengthened Unix timeout regression to verify the spawned descendant
-  actually stops running, and added a new Windows PowerShell grandchild process
-  test. Local Linux targeted regression passes. Windows outcome **pending CI**.
-- S2a: bounded three direct MCP file-backed text readers, secret-file scanning,
-  and external SourceMap JSON files to 64 MiB. Oversized/unreadable modules now
-  fail the whole graph/secret scan rather than returning incomplete success.
-  Sparse oversized-file regression tests pass locally; all-platform CI pending.
-- S2b: 16 MiB provider HTTP response budget now reads a sentinel extra byte,
-  rejecting truncated responses even if their first bytes form valid JSON.
-  Cross-OS test is required before the atomic gate is marked DONE.
-- Local checks on these changes: `cargo fmt --check`, 123/123 Rust tests with
-  loopback permission, strict Clippy and Node task gate unit tests pass.
-- CI: every Rust matrix OS runs atomic task checks and uploads a per-commit
-  receipt; a separate job aggregates Windows + Linux reports without treating
-  explicitly unimplemented tasks as done. Its **new-head outcome is pending**.
+Last fully verified PR head: `fcc57842e87232a2f831c838885e047a1d513c95`.
+GitHub Actions: https://github.com/nplong90/rea-fast/actions/runs/40645160168
+— 6/6 jobs passed, including Windows race/timeout and both platform receipts;
+task aggregate artifact `12797103859`.
+Pinned upstream: `morluto/rea@6de60993b861266e63a4e70d5c6d9a8073f7cd92`.
+Tracking PR: https://github.com/nplong90/rea-fast/pull/1 (Draft).
 
-CI #66 exposed a Windows-only, parallel-test fixture name collision in
-`asar::tests::asar_rejects_cross_platform_reserved_path_components`:
-`isolated_test_dir` previously used PID + clock nanoseconds, which are not
-unique at Windows timer resolution. The Windows grandchild timeout regression
-itself **passed**. An atomic per-process fixture counter is now included; the
-next CI run must independently verify the entire suite before this blocker is
-cleared.
-
-Next independently actionable work after the gate is green: finish S1
-concurrent extraction race hardening, then S2 direct-read inventory, followed
-by the remaining C2/E1/F1/B1 verification and R1. The PR remains Draft.
-
-Snapshot: 2026-10-28, PR head `3a4fac3f63031478ba7147e2afe83af3480ce54c`.
-Reference: `morluto/rea` pinned at `6de60993b861266e63a4e70d5c6d9a8073f7cd92`.
-Tracking PR: https://github.com/nplong90/rea-fast/pull/1
-Latest complete quality CI: https://github.com/nplong90/rea-fast/actions/runs/40610886877 (5/5 green, 114 Rust tests).
-
-## Implementation ledger — 2026-10-28, local worktree (not merged)
-
-| ID | Progress | Observed evidence / remaining blocker |
+| Atomic task group | Verified status | Evidence / limitation |
 | --- | --- | --- |
-| G0 | Implemented, locally checked | Versioned `tests/acceptance/route-contracts.json` for 245 entries; reproducible generator and CI drift check. Separate M1/M2 docs; provider/platform specifics remain only conservative labels. |
-| S1 | Partial | SourceMap, bundle, Tauri, pipeline and ASAR outputs now require a fresh destination and exclusive files; symlink-parent and no-clobber tests. **Concurrent rename race and Windows adversarial tests still required; no race-proof claim.** |
-| S2 | Partial | Shared bounded readers cover pipeline, plist, PCAP, managed, Tauri, bundle and SourceMap; Rust `.dep-v0` cap and compression-bomb regression. Further repo-wide I/O audit required. |
-| S3 | Partial | External process streams capped at 1 MiB each, explicitly error on truncation, timeout uses process-group cleanup on Unix; ADB device/property/package queries now use the bounded runner instead of unbounded `.output()`. Linux unit regressions pass. **Windows process-tree cleanup and adversarial testing are pending.** |
-| C1 | Route-smoke coverage complete, semantic proof pending | **63/63 native-labeled routes** have black-box MCP assertions (+32 from baseline), including narrow negative-detection cases and header-level fixtures. Full positive real-world formats, upstream functional parity, and cross-OS CI remain open. |
-| C2 | In progress | 51/53 external routes passed offline fail-closed test with PATH empty; two host process routes correctly excluded. Live ADB/Rizin/JEB/Frida etc. remain unverified. |
-| E1 | Pending | No new complete Electron Evidence/ASAR/native/mobile upstream semantic comparators. |
-| F1 | Partial | Existing parser mutation tests plus new resource/overwriting regressions; full adversarial corpus and cross-platform stress pending. |
-| B1 | Pending | Five-workload matched end-to-end CPU/RSS/time benchmark not run. |
-| R1 | Pending | Independent review and final Windows+Linux CI on this new head still required. |
+| G0 routing | DONE | All 245 catalog contracts checked for drift on Linux and Windows. |
+| S1 extraction race | DONE | Handle-relative extraction, concurrent rename/symlink tests on both OS, fresh private outputs. |
+| S2a/S2b/S2c/S2 I/O | DONE | Full direct-I/O inventory (`quality/IO_AUDIT.md`), bounded project/file output, ZIP/ASAR/Tauri/procfs/fuses stress regressions and both-OS CI. |
+| S3 Unix/Windows | DONE | Child process tree termination in both operating systems, bounded bridge output. |
+| C1 and C2 offline | DONE | 63 real-MCP native route fixtures and 51 provider-absent fail-closed probes (2 host-proc exceptions). |
+| C2 live | BLOCKED | Still need real ADB/Rizin positive/malformed/timeout matrix or explicit demotion; proprietary integration cannot be declared verified without a provider. |
+| E1 upstream | PENDING CI | Four *real* local comparators matched narrow JS, ASAR, Electron, ELF and APK facts; this commit wires them to the Linux atomic gate using pinned upstream, not yet a remote E1 receipt. Full upstream Evidence graph remains excluded. |
+| F1 adversarial | BLOCKED | Wider cross-parser/transport deterministic corpus plus CPU/RSS/time ceilings missing. |
+| B1 benchmark | BLOCKED | Five comparable workloads with end-to-end process-family metrics missing. |
+| R1 merge review | BLOCKED | Independent final-head review and owner's explicit merge decision required. |
 
-Local verification: `cargo check --locked --all-targets`, Clippy `-D warnings`,
-123/123 Rust tests (with loopback permission), 63 native catalog MCP fixtures,
-51 provider-negative probes, and oversize/malformed MCP stdio recovery. Do not
-interpret these as completed M1, M2, or approval to merge. This ledger must be
-updated after remote Windows CI runs.
+Completed task count on last fully verified CI SHA: **10/15**.
+Do not upgrade E1 to DONE until the new commit's actual Linux parity job and
+same-SHA goal aggregator pass. Do not infer M1/M2 approval from any green CI.
 
 ## Decision: merge a bounded hardening milestone, not a drop-in REA replacement
 
