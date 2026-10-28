@@ -14,11 +14,23 @@ silently complete a Windows gate. No daily schedule or auto-merge.
 - S3: strengthened Unix timeout regression to verify the spawned descendant
   actually stops running, and added a new Windows PowerShell grandchild process
   test. Local Linux targeted regression passes. Windows outcome **pending CI**.
+- S2a: bounded three direct MCP file-backed text readers, secret-file scanning,
+  and external SourceMap JSON files to 64 MiB. Oversized/unreadable modules now
+  fail the whole graph/secret scan rather than returning incomplete success.
+  Sparse oversized-file regression tests pass locally; all-platform CI pending.
 - Local checks on these changes: `cargo fmt --check`, 123/123 Rust tests with
   loopback permission, strict Clippy and Node task gate unit tests pass.
 - CI: every Rust matrix OS runs atomic task checks and uploads a per-commit
   receipt; a separate job aggregates Windows + Linux reports without treating
   explicitly unimplemented tasks as done. Its **new-head outcome is pending**.
+
+CI #66 exposed a Windows-only, parallel-test fixture name collision in
+`asar::tests::asar_rejects_cross_platform_reserved_path_components`:
+`isolated_test_dir` previously used PID + clock nanoseconds, which are not
+unique at Windows timer resolution. The Windows grandchild timeout regression
+itself **passed**. An atomic per-process fixture counter is now included; the
+next CI run must independently verify the entire suite before this blocker is
+cleared.
 
 Next independently actionable work after the gate is green: finish S1
 concurrent extraction race hardening, then S2 direct-read inventory, followed

@@ -760,17 +760,35 @@ mod tests {
     use std::io::Write;
 
     fn isolated_test_dir() -> PathBuf {
+        // Windows clock resolution is too coarse to rely on nanoseconds alone:
+        // parallel tests can observe an identical timestamp in one process.
+        // An atomic counter makes every fixture name distinct even then.
+        static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "rea_asar_security_{}_{}",
+            "rea_asar_security_{}_{}_{}",
             std::process::id(),
-            nanos
+            nanos,
+            NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
         path
+    }
+
+    #[test]
+    fn isolated_fixture_dirs_are_unique_under_concurrent_creation() {
+        let handles: Vec<_> = (0..32)
+            .map(|_| std::thread::spawn(isolated_test_dir))
+            .collect();
+        let paths: Vec<_> = handles.into_iter().map(|t| t.join().unwrap()).collect();
+        let unique: std::collections::HashSet<_> = paths.iter().collect();
+        assert_eq!(unique.len(), paths.len());
+        for path in paths {
+            fs::remove_dir(path).unwrap();
+        }
     }
 
     #[test]
