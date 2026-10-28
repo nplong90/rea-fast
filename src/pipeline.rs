@@ -8,6 +8,7 @@ use crate::{
     mobile::{AndroidPackageInfo, MobileInspector},
     native_binary::{BinaryLayout, GoBuildInfo, NativeInspector, RustBinaryInfo, WasmInterface},
     secrets::SecretScanner,
+    security_io::{self, MAX_ANALYSIS_FILE_BYTES, MAX_SOURCE_FILE_BYTES},
     sourcemap::SourceMapExtractor,
     storage_pcap::{PcapCaptureInfo, SqliteDbInfo, StoragePcapInspector},
     tauri::TauriScanner,
@@ -16,12 +17,16 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use std::{
     error::Error,
-    fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
+
+static PIPELINE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -103,7 +108,7 @@ pub struct PipelineReport {
 }
 
 fn sha256_file(path: &Path) -> Result<String, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
+    let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
@@ -154,7 +159,8 @@ impl AuditPipeline {
                 "pcap" | "pcapng" | "cap" => return TargetKind::PcapCapture,
                 "js" | "mjs" | "cjs" => {
                     // Check if bundle or single source
-                    if let Ok(content) = fs::read_to_string(path)
+                    if let Ok(content) =
+                        security_io::read_string_limited(path, MAX_SOURCE_FILE_BYTES)
                         && (content.contains("webpackChunk")
                             || content.contains("__webpack_require__")
                             || content.contains("__commonJS"))
@@ -169,7 +175,7 @@ impl AuditPipeline {
         }
 
         // Check magic bytes
-        if let Ok(bytes) = fs::read(path) {
+        if let Ok(bytes) = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES) {
             if bytes.len() >= 4 && &bytes[..4] == b"\0asm" {
                 return TargetKind::WasmArtifact;
             }
@@ -237,8 +243,16 @@ impl AuditPipeline {
         let staging_dir = if let Some(out) = custom_out_dir {
             out.to_path_buf()
         } else {
-            std::env::temp_dir().join(format!("rea_pipeline_{}", std::process::id()))
+            std::env::temp_dir().join(format!(
+                "rea_pipeline_{}_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+                    .as_nanos(),
+                PIPELINE_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ))
         };
+        security_io::create_private_output_directory(&staging_dir)?;
 
         // 1. STAGE: De-packaging & Source Recovery
         let analysis_target_dir = match &target_kind {
@@ -270,9 +284,8 @@ impl AuditPipeline {
                 let bundle_dest = staging_dir.join("recovered_modules");
                 let recoverer =
                     SourceRecoverer::new(ExtractionMode::Structural, RewriteLevel::Standard);
-                if let Ok(res) = recoverer.recover(&target_canonical, &bundle_dest) {
-                    recovered_modules_count = res.recovered_modules.len();
-                }
+                let res = recoverer.recover(&target_canonical, &bundle_dest)?;
+                recovered_modules_count = res.recovered_modules.len();
 
                 // Check for sourcemap in bundle
                 let sm_dest = staging_dir.join("sourcemap_sources");
@@ -382,7 +395,9 @@ impl AuditPipeline {
             }
             TargetKind::WasmArtifact => {
                 stages.push("wasm-interface-audit".to_string());
-                if let Ok(bytes) = fs::read(&target_canonical) {
+                if let Ok(bytes) =
+                    security_io::read_limited(&target_canonical, MAX_ANALYSIS_FILE_BYTES)
+                {
                     let wasm = NativeInspector::inspect_wasm(&bytes);
                     Self::audit_wasm(&wasm, &target_canonical, &mut findings);
                 }
@@ -454,7 +469,7 @@ impl AuditPipeline {
         // 3. STAGE: Electron Security & IPC Auditing
         stages.push("electron-security-audit".to_string());
         for p in &js_files {
-            if let Ok(source) = fs::read_to_string(p) {
+            if let Ok(source) = security_io::read_string_limited(p, MAX_SOURCE_FILE_BYTES) {
                 let el_findings = electron::analyze_electron_source(&source, &p.to_string_lossy());
                 Self::translate_electron_findings(&el_findings, p, &mut findings);
             }
@@ -463,7 +478,7 @@ impl AuditPipeline {
         // 4. STAGE: Secret Leak & API Endpoint Scanning
         stages.push("secrets-and-endpoints-scan".to_string());
         for p in &js_files {
-            if let Ok(source) = fs::read_to_string(p) {
+            if let Ok(source) = security_io::read_string_limited(p, MAX_SOURCE_FILE_BYTES) {
                 let file_str = p.to_string_lossy().to_string();
                 let secret_res = SecretScanner::scan_str(&source, Some(&file_str));
                 for sec in secret_res.secrets {
@@ -549,8 +564,7 @@ impl AuditPipeline {
         let mut full_findings_path = None;
         if findings.len() > 50 {
             let full_path = staging_dir.join("audit_findings_full.json");
-            let _ = fs::create_dir_all(&staging_dir);
-            if let Ok(file) = fs::File::create(&full_path) {
+            if let Ok(file) = security_io::create_new_file(&full_path) {
                 let _ = serde_json::to_writer_pretty(file, &findings);
                 full_findings_path = Some(full_path.to_string_lossy().to_string());
             }

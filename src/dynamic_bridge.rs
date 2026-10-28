@@ -7,6 +7,7 @@ use std::{
     io::Read,
     path::PathBuf,
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -74,6 +75,57 @@ pub struct LiveProcessDetail {
 }
 
 pub struct DynamicBridge;
+
+const MAX_BRIDGE_STREAM_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct BridgeStreamCapture {
+    bytes: Vec<u8>,
+    truncated: bool,
+    error: Option<String>,
+}
+
+fn capture_bridge_stream<R: Read>(mut input: R) -> BridgeStreamCapture {
+    let mut capture = BridgeStreamCapture::default();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match input.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let available = MAX_BRIDGE_STREAM_BYTES.saturating_sub(capture.bytes.len());
+                capture.bytes.extend_from_slice(&chunk[..n.min(available)]);
+                if n > available {
+                    capture.truncated = true;
+                }
+                // Drain the rest of the pipe: stopping here could deadlock the
+                // child when it writes into a full OS pipe buffer.
+            }
+            Err(e) => {
+                capture.error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    capture
+}
+
+fn stop_bridge_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        // Spawned children have a fresh process group (see below); kill the
+        // entire group, including helpers that inherited stdout/stderr.
+        let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
 
 impl DynamicBridge {
     // ==========================================
@@ -510,12 +562,17 @@ impl DynamicBridge {
             }
         };
 
-        let mut child = match Command::new(&bin_path)
+        let mut command = Command::new(&bin_path);
+        command
             .args(args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
         {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 return json!({
@@ -526,24 +583,20 @@ impl DynamicBridge {
             }
         };
 
-        let mut stdout_handle = child.stdout.take();
-        let mut stderr_handle = child.stderr.take();
-
-        let stdout_thread = thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut stream) = stdout_handle.take() {
-                let _ = stream.read_to_end(&mut buf);
-            }
-            buf
+        let (sender, receiver) = mpsc::channel();
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdout_sender = sender.clone();
+        thread::spawn(move || {
+            let capture = stdout_pipe.map(capture_bridge_stream).unwrap_or_default();
+            let _ = stdout_sender.send(("stdout", capture));
         });
-
-        let stderr_thread = thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut stream) = stderr_handle.take() {
-                let _ = stream.read_to_end(&mut buf);
-            }
-            buf
+        let stderr_sender = sender.clone();
+        thread::spawn(move || {
+            let capture = stderr_pipe.map(capture_bridge_stream).unwrap_or_default();
+            let _ = stderr_sender.send(("stderr", capture));
         });
+        drop(sender);
 
         let start = Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
@@ -554,21 +607,40 @@ impl DynamicBridge {
                 Ok(Some(s)) => break Ok(s),
                 Ok(None) => {
                     if start.elapsed() >= timeout {
-                        let _ = child.kill();
+                        stop_bridge_process_tree(&mut child);
                         timed_out = true;
                         break child.wait();
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
-                Err(e) => break Err(e),
+                Err(e) => {
+                    stop_bridge_process_tree(&mut child);
+                    let _ = child.wait();
+                    break Err(e);
+                }
             }
         };
 
-        let stdout_bytes = stdout_thread.join().unwrap_or_default();
-        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+        let mut stdout_capture = BridgeStreamCapture::default();
+        let mut stderr_capture = BridgeStreamCapture::default();
+        for _ in 0..2 {
+            match receiver.recv_timeout(Duration::from_secs(2)) {
+                Ok(("stdout", result)) => stdout_capture = result,
+                Ok(("stderr", result)) => stderr_capture = result,
+                Ok(_) => {}
+                Err(_) => {
+                    stop_bridge_process_tree(&mut child);
+                    return json!({
+                        "status": "error",
+                        "tool": bin,
+                        "error": "Bridge output pipes did not close after process termination"
+                    });
+                }
+            }
+        }
 
-        let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+        let stdout = String::from_utf8_lossy(&stdout_capture.bytes).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_capture.bytes).to_string();
 
         if timed_out {
             return json!({
@@ -580,9 +652,28 @@ impl DynamicBridge {
             });
         }
 
+        if stdout_capture.truncated || stderr_capture.truncated {
+            return json!({
+                "status": "error", "tool": bin,
+                "error": "Bridge output exceeded 1 MiB per stream",
+                "stdout_truncated": stdout_capture.truncated,
+                "stderr_truncated": stderr_capture.truncated,
+                "stdout": stdout, "stderr": stderr
+            });
+        }
+        if stdout_capture.error.is_some() || stderr_capture.error.is_some() {
+            return json!({
+                "status": "error", "tool": bin,
+                "error": "Bridge output pipe read failed",
+                "stdout_error": stdout_capture.error,
+                "stderr_error": stderr_capture.error,
+                "stdout": stdout, "stderr": stderr
+            });
+        }
+
         match status {
             Ok(exit_status) => json!({
-                "status": "ok",
+                "status": if exit_status.success() { "ok" } else { "error" },
                 "tool": bin,
                 "exit_code": exit_status.code(),
                 "stdout": stdout,
@@ -702,6 +793,36 @@ mod tests {
         assert_eq!(res["status"], "ok");
         assert_eq!(res["exit_code"], 0);
         assert!(res["stdout"].as_str().unwrap().contains("hello_bridge"));
+    }
+
+    #[test]
+    fn test_bridge_reader_is_bounded() {
+        let data = vec![b'x'; MAX_BRIDGE_STREAM_BYTES + 17];
+        let capture = capture_bridge_stream(std::io::Cursor::new(data));
+        assert_eq!(capture.bytes.len(), MAX_BRIDGE_STREAM_BYTES);
+        assert!(capture.truncated);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_optional_bridge_reports_truncation_as_error() {
+        let res = DynamicBridge::run_optional_bridge(
+            "sh",
+            "none",
+            &["-c", "head -c 1100000 /dev/zero"],
+            5,
+        );
+        assert_eq!(res["status"], "error");
+        assert_eq!(res["stdout_truncated"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_optional_bridge_timeout_cleans_up_descendants() {
+        let start = Instant::now();
+        let res = DynamicBridge::run_optional_bridge("sh", "none", &["-c", "sleep 5 & wait"], 0);
+        assert_eq!(res["status"], "timeout");
+        assert!(start.elapsed() < Duration::from_secs(4));
     }
 
     #[cfg(windows)]

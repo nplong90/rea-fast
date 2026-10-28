@@ -1,6 +1,9 @@
+use crate::security_io::{self, MAX_ANALYSIS_FILE_BYTES};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, error::Error, fs, path::Path};
+#[cfg(test)]
+use std::fs;
+use std::{collections::BTreeSet, error::Error, path::Path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SqliteTableInfo {
@@ -49,7 +52,7 @@ pub struct StoragePcapInspector;
 
 impl StoragePcapInspector {
     pub fn inspect_sqlite(path: &Path) -> Result<SqliteDbInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
 
         if bytes.len() < 100 || &bytes[..16] != b"SQLite format 3\0" {
@@ -124,7 +127,7 @@ impl StoragePcapInspector {
     }
 
     pub fn inspect_pcap(path: &Path) -> Result<PcapCaptureInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
 
         if bytes.len() < 24 {

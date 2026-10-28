@@ -19,6 +19,7 @@ pub mod native_binary;
 pub mod pipeline;
 pub mod plist;
 pub mod secrets;
+pub mod security_io;
 pub mod semantics;
 pub mod session_manager;
 pub mod sourcemap;

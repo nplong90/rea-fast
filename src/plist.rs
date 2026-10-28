@@ -1,6 +1,6 @@
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 /// Parse bplist00 or XML/text plist into serde_json::Value
@@ -13,7 +13,8 @@ pub fn parse_plist_bytes(bytes: &[u8]) -> Result<Value, String> {
 }
 
 pub fn parse_plist_file<P: AsRef<Path>>(path: P) -> Result<Value, String> {
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = security_io::read_limited(path.as_ref(), MAX_SOURCE_FILE_BYTES)
+        .map_err(|e| e.to_string())?;
     parse_plist_bytes(&bytes)
 }
 
@@ -491,6 +492,18 @@ pub fn inspect_keyed_archive(args: &Value) -> Value {
         Err(e) => return json!({ "status": "error", "message": e }),
     };
 
+    // The lightweight XML plist scanner supports scalar keys, not nested
+    // dictionaries/arrays.  It must not silently present a keyed archive's
+    // inaccessible objects as an empty, fully decoded archive.
+    if !plist_val.get("$objects").is_some_and(Value::is_array)
+        || !plist_val.get("$top").is_some_and(Value::is_object)
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "Nested XML keyed archives are not supported by this lightweight plist decoder; no objects were verified",
+        });
+    }
+
     let objects = plist_val.get("$objects").and_then(|o| o.as_array());
     let top = plist_val.get("$top");
     let archiver = plist_val
@@ -518,6 +531,15 @@ pub fn decode_interface_builder(_args: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_xml_keyed_archive_must_not_claim_complete_decoding() {
+        let p = std::env::temp_dir().join(format!("rea-keyed-{}.plist", std::process::id()));
+        std::fs::write(&p, b"<plist><dict><key>$objects</key><array><string>entry</string></array><key>$top</key><dict></dict></dict></plist>").unwrap();
+        let result = inspect_keyed_archive(&json!({"path": p.to_string_lossy()}));
+        let _ = std::fs::remove_file(p);
+        assert_eq!(result["status"], "unavailable");
+    }
 
     #[test]
     fn interface_builder_stub_must_not_claim_decoded_documents() {

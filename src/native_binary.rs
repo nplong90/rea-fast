@@ -59,6 +59,19 @@ pub struct WasmInterface {
 }
 
 const MAX_NATIVE_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_RUST_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+
+fn decompress_rust_metadata(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut decoder = ZlibDecoder::new(data);
+    let mut decompressed = Vec::new();
+    (&mut decoder)
+        .take(MAX_RUST_METADATA_BYTES + 1)
+        .read_to_end(&mut decompressed)?;
+    if decompressed.len() as u64 > MAX_RUST_METADATA_BYTES {
+        return Err("Rust .dep-v0 section exceeds 16 MiB decompression limit".into());
+    }
+    Ok(decompressed)
+}
 
 fn read_bounded_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
     let file = fs::File::open(path)?;
@@ -192,11 +205,8 @@ impl NativeInspector {
                 if sec.name().unwrap_or("") == ".dep-v0"
                     && let Ok(data) = sec.data()
                 {
-                    let mut decoder = ZlibDecoder::new(data);
-                    let mut decompressed = Vec::new();
-                    if decoder.read_to_end(&mut decompressed).is_ok()
-                        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decompressed)
-                    {
+                    let decompressed = decompress_rust_metadata(data)?;
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decompressed) {
                         return Ok(RustBinaryInfo {
                             has_rust_auditable: true,
                             raw_json: Some(json),
@@ -1027,6 +1037,20 @@ fn read_leb128(bytes: &[u8]) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::io::Write;
+
+    #[test]
+    fn compressed_rust_metadata_bomb_is_refused() {
+        use flate2::{Compression, write::ZlibEncoder};
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder
+            .write_all(&vec![0u8; MAX_RUST_METADATA_BYTES as usize + 1])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(compressed.len() < 1024 * 1024);
+        assert!(decompress_rust_metadata(&compressed).is_err());
+    }
 
     #[test]
     fn large_native_files_are_rejected_before_reading_into_memory() {

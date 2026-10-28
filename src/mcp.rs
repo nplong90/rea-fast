@@ -599,8 +599,9 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
         "extract_sourcemap" => {
             let path_str = args
                 .get("path")
+                .or_else(|| args.get("map_path"))
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "Missing 'path' argument".to_string())?;
+                .ok_or_else(|| "Missing 'path' or 'map_path' argument".to_string())?;
             let out_dir_str = args
                 .get("output_directory")
                 .and_then(|v| v.as_str())
@@ -617,6 +618,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "Missing 'target_path' or 'path' argument".to_string())?;
             let out_dir = args
                 .get("output_directory")
+                .or_else(|| args.get("output_dir"))
                 .and_then(|v| v.as_str())
                 .map(Path::new);
             let res =
@@ -681,6 +683,7 @@ pub fn handle_tool_call(name: &str, args: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "Missing 'path' argument".to_string())?;
             let extract_to = args
                 .get("output_directory")
+                .or_else(|| args.get("output_dir"))
                 .and_then(|v| v.as_str())
                 .map(Path::new);
             let res = TauriScanner::audit_path(Path::new(path_str), extract_to)

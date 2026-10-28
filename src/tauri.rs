@@ -1,6 +1,8 @@
+use crate::security_io::{self, MAX_ANALYSIS_FILE_BYTES};
 use regex::Regex;
 use serde::Serialize;
-use std::{error::Error, fs, path::Path, sync::LazyLock};
+use std::io::Read;
+use std::{error::Error, path::Path, sync::LazyLock};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TauriInfo {
@@ -137,7 +139,7 @@ impl TauriScanner {
         bytes: &[u8],
         out_dir: &Path,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        fs::create_dir_all(out_dir)?;
+        security_io::create_private_output_directory(out_dir)?;
         let mut extracted = Vec::new();
         let text = String::from_utf8_lossy(bytes);
 
@@ -155,7 +157,10 @@ impl TauriScanner {
                     format!("page_{}.html", html_count)
                 };
                 let out_file = out_dir.join(&file_name);
-                fs::write(&out_file, html_content.as_bytes())?;
+                std::io::Write::write_all(
+                    &mut security_io::create_new_file(&out_file)?,
+                    html_content.as_bytes(),
+                )?;
                 extracted.push(file_name);
                 html_count += 1;
                 idx = end;
@@ -173,13 +178,20 @@ impl TauriScanner {
                 // Heuristic probe for brotli decompressed asset
                 let mut decompressed = Vec::new();
                 let sub = &bytes[cursor..std::cmp::min(cursor + 512 * 1024, bytes.len())];
-                if brotli::BrotliDecompress(&mut std::io::Cursor::new(sub), &mut decompressed)
+                let mut decoder = brotli::Decompressor::new(std::io::Cursor::new(sub), 4096);
+                if (&mut decoder)
+                    .take(16 * 1024 * 1024 + 1)
+                    .read_to_end(&mut decompressed)
                     .is_ok()
+                    && decompressed.len() <= 16 * 1024 * 1024
                     && (decompressed.starts_with(b"<!DOCTYPE html>")
                         || decompressed.starts_with(b"<html"))
                 {
                     let file_name = format!("brotli_decompressed_{}.html", chunk_id);
-                    fs::write(out_dir.join(&file_name), &decompressed)?;
+                    std::io::Write::write_all(
+                        &mut security_io::create_new_file(&out_dir.join(&file_name))?,
+                        &decompressed,
+                    )?;
                     extracted.push(file_name);
                     chunk_id += 1;
                     cursor += sub.len();
@@ -241,7 +253,7 @@ impl TauriScanner {
         path: &Path,
         extract_to: Option<&Path>,
     ) -> Result<TauriAuditResult, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
         let info = Self::detect_binary(&bytes);
         let config = Self::extract_config(&bytes);
         let extracted_files = if let Some(out) = extract_to {

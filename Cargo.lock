@@ -971,6 +971,7 @@ dependencies = [
  "clap",
  "flate2",
  "ignore",
+ "libc",
  "object",
  "oxc_allocator",
  "oxc_ast",

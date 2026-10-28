@@ -376,7 +376,10 @@ impl AsarArchive {
         dest_dir: &Path,
         integrity_policy: IntegrityPolicy,
     ) -> Result<ExtractionResult, Box<dyn std::error::Error>> {
-        fs::create_dir_all(dest_dir)?;
+        // Never reuse a caller-supplied directory: doing so would allow an
+        // attacker to replace a checked child parent with a symlink while
+        // extraction proceeds. The exclusive root is private on Unix.
+        crate::security_io::create_private_output_directory(dest_dir)?;
         let canonical_dest = dest_dir.canonicalize()?;
 
         let mut extracted_files = Vec::new();

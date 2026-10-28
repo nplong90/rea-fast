@@ -1,3 +1,4 @@
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{
     ArrayExpressionElement, CallExpression, Declaration, Expression, ObjectPropertyKind,
@@ -7,8 +8,9 @@ use oxc_parser::{ParseOptions, Parser};
 use oxc_span::{SourceType, Span};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use std::{
-    fs::{self, File},
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -146,13 +148,13 @@ impl SourceRecoverer {
             return Err(format!("Parent directory does not exist: {}", parent.display()).into());
         }
 
-        let source = fs::read_to_string(input_path)?;
+        let source = security_io::read_string_limited(input_path, MAX_SOURCE_FILE_BYTES)?;
         let original_sha256 = sha256_hex(source.as_bytes());
 
         let (bundler, raw_modules, mut warnings) =
             self.detect_and_extract_modules(&source, input_path);
 
-        fs::create_dir_all(output_directory)?;
+        security_io::create_private_output_directory(output_directory)?;
 
         let mut recovered = Vec::new();
 
@@ -160,9 +162,10 @@ impl SourceRecoverer {
             let rel_path = sanitize_module_path(&raw.id, idx);
             let target_path = output_directory.join(&rel_path);
 
-            if let Some(target_parent) = target_path.parent() {
-                fs::create_dir_all(target_parent)?;
-            }
+            security_io::ensure_plain_parents(
+                output_directory,
+                rel_path.parent().unwrap_or_else(|| Path::new("")),
+            )?;
 
             let start = raw.body_span.start as usize;
             let end = raw.body_span.end as usize;
@@ -182,7 +185,7 @@ impl SourceRecoverer {
             let hash = sha256_hex(bytes);
             let size = bytes.len();
 
-            let mut f = File::create(&target_path)?;
+            let mut f = security_io::create_new_file(&target_path)?;
             f.write_all(bytes)?;
 
             recovered.push(RecoveredModule {
@@ -208,7 +211,7 @@ impl SourceRecoverer {
         };
 
         let manifest_bytes = serde_json::to_vec_pretty(&result)?;
-        let mut mf = File::create(&manifest_path)?;
+        let mut mf = security_io::create_new_file(&manifest_path)?;
         mf.write_all(&manifest_bytes)?;
 
         Ok(result)

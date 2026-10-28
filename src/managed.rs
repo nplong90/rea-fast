@@ -1,6 +1,5 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
 
 #[derive(Debug, Default)]
 pub struct ClrMetadata {
@@ -263,7 +262,10 @@ fn format_guid(b: &[u8]) -> String {
 
 pub fn inspect_managed_artifact(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
         Err(e) => {
             return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
@@ -305,7 +307,10 @@ pub fn inspect_managed_members(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let type_filter = args.get("type_names").and_then(|v| v.as_array());
 
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
         Err(e) => {
             return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
@@ -338,7 +343,10 @@ pub fn inspect_managed_members(args: &Value) -> Value {
 
 pub fn inspect_managed_native_boundaries(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
         Err(e) => {
             return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
