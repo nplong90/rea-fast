@@ -29,9 +29,18 @@
       ]
     },
     {
+      "id": "S2b-http-response-bounds",
+      "title": "Reject oversized provider HTTP responses, even if the prefix is valid JSON",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "http-response-one-extra-byte", "argv": ["cargo", "test", "--locked", "tcp_driver::tests::oversized_http_response_cannot_pass_as_valid_json_prefix", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
       "id": "S2-bounded-io",
       "title": "Finish repository-wide direct I/O allocation and decompression audit",
-      "depends_on": ["S2a-bounded-text-readers"],
+      "depends_on": ["S2a-bounded-text-readers", "S2b-http-response-bounds"],
       "platforms": ["linux", "win32"],
       "checks": [],
       "blocker": "Remaining direct readers and resource stress corpus need a complete reviewed inventory"

@@ -18,6 +18,9 @@ silently complete a Windows gate. No daily schedule or auto-merge.
   and external SourceMap JSON files to 64 MiB. Oversized/unreadable modules now
   fail the whole graph/secret scan rather than returning incomplete success.
   Sparse oversized-file regression tests pass locally; all-platform CI pending.
+- S2b: 16 MiB provider HTTP response budget now reads a sentinel extra byte,
+  rejecting truncated responses even if their first bytes form valid JSON.
+  Cross-OS test is required before the atomic gate is marked DONE.
 - Local checks on these changes: `cargo fmt --check`, 123/123 Rust tests with
   loopback permission, strict Clippy and Node task gate unit tests pass.
 - CI: every Rust matrix OS runs atomic task checks and uploads a per-commit
