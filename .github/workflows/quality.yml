@@ -22,6 +22,8 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Verify versioned routing contract
+        run: node tests/acceptance/contracts.mjs --check
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check compilation
@@ -46,6 +48,12 @@ jobs:
           extension=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
           node tests/acceptance/mcp-matrix.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/mcp-matrix-${{ runner.os }}.json"
+      - name: Offline provider fail-closed evidence (53 routes)
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/acceptance/provider-offline.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/provider-offline-${{ runner.os }}.json"
       - name: Upload 245-tool acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4

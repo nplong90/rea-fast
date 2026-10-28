@@ -1,5 +1,24 @@
 # rea-fast quality goal
 
+## Merge scope: M1 hardening vs. M2 full REA replacement
+
+**M1 (partial-compatible hardening merge)** is a scoped integration milestone,
+not a release of a full REA replacement. All capabilities explicitly advertised
+as supported must have black-box positive/negative runtime assertions; known
+reachable P0/P1 security/correctness issues must be closed; unsupported routes
+must fail closed with accurate capability labels. Versioned status for all 245
+routes lives in [`tests/acceptance/route-contracts.json`](tests/acceptance/route-contracts.json).
+The `fixture-backed-candidate` label denotes a narrow exercised scenario, not
+semantic parity or universal success. The manifest is regenerated with
+`node tests/acceptance/contracts.mjs --write` and checked in CI with `--check`.
+
+**M2 (upstream drop-in equivalence)** retains the stricter compatibility and
+release requirements below for every required upstream tool/evidence contract.
+M1 may be merged only with explicit *partial* labeling and user approval;
+finishing M1 never implies that M2 passed. See
+[`plans/rea-fast-merge-readiness/plan.md`](plans/rea-fast-merge-readiness/plan.md)
+for implementation tasks and acceptance checks.
+
 ## Baselines (2026-10-27)
 
 - Fork: `nplong90/rea-fast`, revision `7e4a6cb59c25d5814535714b0d42ac371c11b15d`.
@@ -41,7 +60,7 @@
 | --- | --- | --- | --- |
 | P0 | Fail-closed MCP/evidence behavior | Regression tests cover false successes and meta-tool recursion | In progress |
 | P1 | Repeatable CI and Windows smoke | Required test/build jobs green for every PR | In progress |
-| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — 245 conservative route labels; 31 catalog routes now fixture-exercised via MCP (not parity-certified) |
+| P2 | Tool capability inventory | Every advertised tool labeled by verified implementation | In progress — all 63 native catalog routes have narrow MCP assertions, 53 provider-dependent and 129 unavailable; semantic parity not certified |
 | P3 | Upstream parity fixtures | Real-world scenarios for JS, Electron, ASAR, binary, ADB and CDP | In progress — JS, ASAR and Electron static subsets matched against real upstream |
 | P4 | Security and bounded resource fuzzing | No unhandled crash on defined corpus and adversarial inputs | In progress — bounded MCP stdio requests, parser mutation tests |
 | P5 | Fair benchmark and release | Reproducible equivalent-task results, signed-off review | Pending |
@@ -52,6 +71,25 @@ Maintain this document as a status ledger; don't convert pending to complete
 based on tool counts or synthetic stub responses.
 
 ## Verification log
+
+### 2026-10-28 — local merge-readiness hardening batch (not remote certified)
+
+- Added a deterministic 245-route M1 contract manifest and CI drift gate;
+  fixture-backed routes are explicitly not treated as upstream parity.
+- SourceMap, bundle, ASAR, Tauri and pipeline extraction now require fresh
+  outputs and refuse existing paths; added symlink/no-clobber regressions.
+- Added bounded file readers, 16 MiB Rust metadata decompression guard, and
+  1 MiB per-stream external CLI output cap with explicit failure semantics.
+- All 63 native-labeled catalog routes now have black-box MCP route fixtures
+  (up from 31). Some deliberately test negative classification, header-level
+  parsing, or partial reports; **these are not full positive format coverage**.
+  The JavaScript, Electron, binary, and mobile upstream semantic acceptance
+  comparison remains incomplete. 51 external-provider routes have
+  offline fail-closed probes; two OS-provider routes are excluded appropriately.
+- 123 Rust unit tests passed locally with loopback permissions, and local
+  MCP/protocol/Clippy gates passed. Windows CI, full race-proof file extraction,
+  live-provider tests, representative upstream parity, full fuzzing and
+  matched benchmarks remain open. PR is not yet eligible for merge.
 
 ### 2026-10-27 — fail-closed managed workflows and binary plist hardening
 

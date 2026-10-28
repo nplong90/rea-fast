@@ -12,6 +12,12 @@ compact MCP profile can lower initial tool-list size. It is **not yet a drop-in
 replacement** for the upstream [morluto/rea](https://github.com/morluto/rea).
 An advertised tool name does not imply the same behavior, evidence contract,
 provider support, or platform coverage as upstream.
+The [versioned route contract](tests/acceptance/route-contracts.json) separates
+fixture-backed candidates from experimental, provider-dependent and unavailable
+routes. Even a fixture-backed candidate has **no asserted upstream parity**.
+The [M1 hardening merge plan](plans/rea-fast-merge-readiness/plan.md) and the
+full-equivalence M2 gate are separate; neither is complete merely because CI
+is green.
 
 ---
 
@@ -48,6 +54,8 @@ memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
   publishes only after completion; it refuses an existing destination archive.
 - **Electron Fuse Detection**: Scans 32-byte sentinel patterns across ELF, PE, and Mach-O binaries to extract all 9 Electron fuses without runtime launching.
 - **AST-Based Bundle Recovery**: Unbundles Webpack chunks, Webpack IIFE, Browserify, and esbuild CommonJS wrappers into structured directories.
+  Requires a fresh output directory; existing files and directories are not
+  overwritten. SourceMap recovery follows the same no-clobber policy.
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
