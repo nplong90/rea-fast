@@ -826,9 +826,89 @@ mod tests {
     #[test]
     fn test_optional_bridge_timeout_cleans_up_descendants() {
         let start = Instant::now();
-        let res = DynamicBridge::run_optional_bridge("sh", "none", &["-c", "sleep 5 & wait"], 0);
+        let res = DynamicBridge::run_optional_bridge(
+            "sh",
+            "none",
+            &["-c", "sleep 60 & echo CHILD_PID=$!; wait"],
+            1,
+        );
         assert_eq!(res["status"], "timeout");
-        assert!(start.elapsed() < Duration::from_secs(4));
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        // Merely timing out the parent is insufficient: the grandchild must
+        // stop executing too. A recently killed orphan may briefly be a zombie.
+        #[cfg(target_os = "linux")]
+        {
+            let stdout = res["stdout"].as_str().expect("bridge stdout missing");
+            let pid = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix("CHILD_PID="))
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .expect("shell did not spawn and report a grandchild");
+            let proc_stat = format!("/proc/{pid}/stat");
+            let running = || {
+                std::fs::read_to_string(&proc_stat)
+                    .ok()
+                    .and_then(|s| s.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|state| state != 'Z' && state != 'X')
+            };
+            for _ in 0..40 {
+                if !running() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            panic!("timed-out bridge left running descendant {pid}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_optional_bridge_timeout_cleans_up_descendants_windows() {
+        let script = "$child = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -PassThru; [Console]::Out.WriteLine('CHILD_PID=' + $child.Id); [Console]::Out.Flush(); Start-Sleep -Seconds 60";
+        let start = Instant::now();
+        let res = DynamicBridge::run_optional_bridge(
+            "powershell.exe",
+            "none",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            12,
+        );
+        assert_eq!(res["status"], "timeout", "{res}");
+        assert!(start.elapsed() < Duration::from_secs(20));
+
+        let stdout = res["stdout"].as_str().expect("bridge stdout missing");
+        let pid = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("CHILD_PID="))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .expect("PowerShell did not spawn and report a grandchild");
+
+        let still_running = || {
+            let query = format!(
+                "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 9 }} else {{ exit 0 }}"
+            );
+            Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.code() == Some(9))
+                .expect("Unable to query descendant status")
+        };
+        for _ in 0..5 {
+            if !still_running() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+        // Do not leave a stray minute-long child on a failed CI test.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("timed-out bridge left running Windows descendant {pid}");
     }
 
     #[cfg(windows)]
