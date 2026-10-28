@@ -231,6 +231,19 @@ impl MobileInspector {
         if bytes[name_start..name_start + name_len] != *entry.name.as_bytes() {
             return Err("ZIP local and central member names disagree".into());
         }
+        if entry.compression_method == 0 && entry.compressed_size != entry.uncompressed_size {
+            return Err(
+                "Stored ZIP member has inconsistent compressed/uncompressed lengths".into(),
+            );
+        }
+
+        // A forged local offset must never use central-directory bytes as an
+        // apparent DEX/manifest payload.
+        let eocd = find_zip_eocd(bytes).ok_or("ZIP EOCD missing while extracting member")?;
+        let central_offset = u32::from_le_bytes(bytes[eocd + 16..eocd + 20].try_into()?) as usize;
+        if data_end > central_offset {
+            return Err("ZIP member overlaps Central Directory".into());
+        }
 
         let raw_data = &bytes[data_start..data_end];
         let decompressed = match entry.compression_method {
@@ -747,6 +760,20 @@ mod tests {
         let bytes = test_zip("classes.dex", 8, &compressed, 2);
         let entry = &MobileInspector::parse_zip_entries(&bytes).unwrap()[0];
         assert!(MobileInspector::extract_zip_entry(&bytes, entry).is_err());
+    }
+
+    #[test]
+    fn stored_zip_member_cannot_borrow_bytes_from_central_directory() {
+        let bytes = test_zip("classes.dex", 0, b"dex", 3);
+        let entry = MobileInspector::parse_zip_entries(&bytes).unwrap()[0].clone();
+        let mut forged = entry.clone();
+        forged.compressed_size = bytes.len() as u64;
+        forged.uncompressed_size = bytes.len() as u64;
+        assert!(MobileInspector::extract_zip_entry(&bytes, &forged).is_err());
+
+        let mut wrong_length = entry;
+        wrong_length.uncompressed_size = 2;
+        assert!(MobileInspector::extract_zip_entry(&bytes, &wrong_length).is_err());
     }
 
     #[test]

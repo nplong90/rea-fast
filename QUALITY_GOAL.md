@@ -404,14 +404,15 @@ based on tool counts or synthetic stub responses.
 - Verify DEX/AndroidManifest member decompression succeeds and its byte length
   matches the directory claim. A corrupt DEX no longer receives an invented
   SHA-256 for an empty byte array. Reject inconsistent local/central member
-  names and compression methods.
+  names and compression methods, oversized stored-member length claims and
+  payload extents that overlap the ZIP Central Directory.
 - Detect v2/v3 APK signature *block IDs* only when located immediately before
   the ZIP Central Directory, with matching size fields and valid pair framing.
   Reject a fake `APK Sig Block 42` string embedded inside ordinary member data.
   Report `signature_cryptographic_verification: not_performed`; no signature
   authenticity, signer identity, certificate chain or content digest is
   cryptographically verified by this static inspector.
-- Added eight targeted Rust regression fixtures (including 65 MiB expansion
+- Added nine targeted Rust regression fixtures (including 65 MiB expansion
   bomb, 256 MiB+1 sparse APK, malformed ZIP and forged signature marker), plus
   real MCP acceptance calls for `inspect_android_package` and
   `inspect_apk_signature`. Assertions independently check DEX SHA-256,
