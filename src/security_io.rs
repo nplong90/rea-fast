@@ -204,6 +204,26 @@ mod tests {
         fs::remove_dir(link)
     }
 
+    /// Windows can reject removal while the defender briefly holds a handle
+    /// during the race. Retry sharing violations; never silently abandon a
+    /// symlink that could invalidate the next iteration of this test.
+    fn unlink_directory_link_after_handles_close(link: &Path) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match unlink_directory_link(link) {
+                Ok(()) => return,
+                Err(error)
+                    if cfg!(windows)
+                        && error.raw_os_error() == Some(32)
+                        && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => panic!("cannot remove attacker link {}: {error}", link.display()),
+            }
+        }
+    }
+
     #[test]
     fn refuses_input_beyond_limit_even_for_sparse_files() {
         let base = std::env::temp_dir().join(format!("rea-fast-limited-{}", std::process::id()));
@@ -307,7 +327,7 @@ mod tests {
         fs::rename(&slot, &held).unwrap();
         link_directory(&outside, &slot).expect("test requires directory-link support");
         assert!(output.create_new_file(Path::new("slot/forbidden")).is_err());
-        unlink_directory_link(&slot).unwrap();
+        unlink_directory_link_after_handles_close(&slot);
         fs::rename(&held, &slot).unwrap();
 
         let active = Arc::new(AtomicBool::new(true));
@@ -325,7 +345,7 @@ mod tests {
                 if fs::rename(&slot, &held).is_ok() && link_directory(&outside, &slot).is_ok() {
                     attacker_swaps.fetch_add(1, Ordering::Relaxed);
                     std::thread::yield_now();
-                    unlink_directory_link(&slot).unwrap();
+                    unlink_directory_link_after_handles_close(&slot);
                 }
                 std::thread::yield_now();
             }
