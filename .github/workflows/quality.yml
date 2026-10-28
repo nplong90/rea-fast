@@ -1,0 +1,221 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify versioned routing contract
+        run: node tests/acceptance/contracts.mjs --check
+      - name: Validate atomic goal checks (no partial-pass promotion)
+        run: |
+          node quality/task-gate.mjs --validate
+          node quality/task-gate.test.mjs
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Check compilation
+        run: cargo check --locked --all-targets
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --locked
+      - name: Build MCP executable for black-box protocol checks
+        run: cargo build --locked
+      - name: MCP malformed-input recovery smoke
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/security/mcp-stdio.mjs --rust-bin "target/debug/rea-fast${extension}"
+      - name: Full 245-tool MCP acceptance evidence (native fixtures)
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/acceptance/mcp-matrix.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/mcp-matrix-${{ runner.os }}.json"
+      - name: Offline provider fail-closed evidence (53 routes)
+        shell: bash
+        run: |
+          extension=""
+          if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
+          node tests/acceptance/provider-offline.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/provider-offline-${{ runner.os }}.json"
+      - name: Checkout pinned upstream REA for semantic gate
+        if: runner.os == 'Linux'
+        uses: actions/checkout@v4
+        with:
+          repository: morluto/rea
+          ref: 6de60993b861266e63a4e70d5c6d9a8073f7cd92
+          path: pinned-upstream
+          persist-credentials: false
+      - name: Set up pinned Node for semantic gate
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Install pinned upstream dependencies for semantic gate
+        if: runner.os == 'Linux'
+        working-directory: pinned-upstream
+        run: npm ci --no-audit --no-fund
+      - name: Build actual upstream implementation for semantic gate
+        if: runner.os == 'Linux'
+        working-directory: pinned-upstream
+        run: npm run build
+      - name: Record atomic same-commit acceptance receipts
+        shell: bash
+        env:
+          REA_UPSTREAM_DIR: ${{ github.workspace }}/pinned-upstream
+        run: node quality/task-gate.mjs --run --strict --output "acceptance-artifacts/task-gate-${{ runner.os }}.json"
+      - name: Upload 245-tool acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-${{ runner.os }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: acceptance-artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: MCP oversize streaming and recovery (Linux)
+        if: runner.os == 'Linux'
+        run: node tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize
+      - name: Validate benchmark harness without claiming benchmark results
+        run: |
+          node --check tests/parity/compare-js.mjs
+          node --check tests/benchmark/run-js.mjs
+          node tests/benchmark/run-js.mjs --self-test
+      - name: Build release candidate
+        run: cargo build --locked --release
+      - name: Validate and stage release candidate
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node tests/release/stage.mjs
+      - name: Upload commit-pinned release candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist-ci/
+          retention-days: 7
+          if-no-files-found: error
+
+  goal-progress:
+    name: Same-head Linux + Windows atomic goal progress
+    needs: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-Linux-${{ github.event.pull_request.head.sha || github.sha }}
+          path: receipt-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-Windows-${{ github.event.pull_request.head.sha || github.sha }}
+          path: receipt-windows
+      - name: Evaluate goal against both real-platform receipts
+        run: |
+          node quality/task-gate.mjs --aggregate receipt-linux/task-gate-Linux.json receipt-windows/task-gate-Windows.json --output task-gate-aggregate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-task-gate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: task-gate-aggregate.json
+          retention-days: 14
+          if-no-files-found: error
+
+  parity-benchmark:
+    name: Pinned upstream JS subset parity + measurement (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.1'
+      - name: Build rea-fast release binary
+        run: cargo build --locked --release
+      - name: Checkout exact upstream commit
+        uses: actions/checkout@v4
+        with:
+          repository: morluto/rea
+          ref: 6de60993b861266e63a4e70d5c6d9a8073f7cd92
+          path: pinned-upstream
+          persist-credentials: false
+      - name: Install upstream locked dependencies
+        working-directory: pinned-upstream
+        run: npm ci --no-audit --no-fund
+      - name: Compile actual upstream implementation
+        working-directory: pinned-upstream
+        run: npm run build
+      - name: Verify real upstream parity before measuring
+        run: |
+          node tests/parity/compare-js.mjs \
+            --rust-bin "$GITHUB_WORKSPACE/target/release/rea-fast" \
+            --upstream "$GITHUB_WORKSPACE/pinned-upstream"
+      - name: Matched-task resource benchmark (3 subsequent runs)
+        shell: bash
+        run: |
+          set -o pipefail
+          node tests/benchmark/run-js.mjs \
+            --rust-bin "$GITHUB_WORKSPACE/target/release/rea-fast" \
+            --upstream "$GITHUB_WORKSPACE/pinned-upstream" \
+            --warm-runs 3 | tee js-benchmark-result.json
+      - name: Upload benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-js-benchmark-${{ github.event.pull_request.head.sha || github.sha }}
+          path: js-benchmark-result.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  browser-cdp:
+    name: Real Chrome CDP + MCP integration (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build MCP executable
+        run: cargo build --locked
+      - name: Verify Chrome executable exists
+        run: |
+          command -v google-chrome
+          google-chrome --version
+      - name: Run real headless Chrome integration
+        run: node tests/cdp/real-chrome.mjs --rust-bin "$GITHUB_WORKSPACE/target/debug/rea-fast"
+
+  debugger-gdb:
+    name: Real GDB MI provider via MCP (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install real GDB
+        run: |
+          if ! command -v gdb >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gdb
+          fi
+          gdb --version
+      - name: Build MCP executable
+        run: cargo build --locked
+      - name: Exercise GDB lifecycle through real MCP process
+        run: node tests/debugger/real-gdb.mjs --rust-bin "$GITHUB_WORKSPACE/target/debug/rea-fast"

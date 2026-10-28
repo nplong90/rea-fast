@@ -1,11 +1,8 @@
+use crate::security_io::{self, MAX_ANALYSIS_FILE_BYTES};
 use regex::Regex;
 use serde::Serialize;
-use std::{
-    error::Error,
-    fs,
-    path::Path,
-    sync::LazyLock,
-};
+use std::io::Read;
+use std::{error::Error, path::Path, sync::LazyLock};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TauriInfo {
@@ -42,6 +39,22 @@ static LISTEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static EMIT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?:emit|__TAURI_EMIT__)\s*\(\s*["']([a-zA-Z0-9_:-]+)["']"#).unwrap()
 });
+
+/// Heuristic decompression is speculative. Bound the number of probe windows
+/// so a binary full of non-Brotli bytes cannot trigger unbounded CPU work.
+const MAX_BROTLI_PROBES: usize = 64;
+const MAX_TAURI_EXTRACT_BYTES: usize = 128 * 1024 * 1024;
+
+fn claim_asset_bytes(total: &mut usize, next: usize) -> Result<(), Box<dyn Error>> {
+    let new_total = total
+        .checked_add(next)
+        .ok_or("Tauri asset extraction size overflow")?;
+    if new_total > MAX_TAURI_EXTRACT_BYTES {
+        return Err("Tauri cumulative asset extraction exceeds 128 MiB limit".into());
+    }
+    *total = new_total;
+    Ok(())
+}
 
 pub struct TauriScanner;
 
@@ -92,10 +105,10 @@ impl TauriScanner {
         idx = 0;
         while let Some(start) = text[idx..].find(r#"{"build""#) {
             let abs_start = idx + start;
-            if let Some(cfg) = Self::try_parse_json_slice(&text[abs_start..]) {
-                if cfg.get("tauri").is_some() || cfg.get("bundle").is_some() {
-                    return Some(cfg);
-                }
+            if let Some(cfg) = Self::try_parse_json_slice(&text[abs_start..])
+                && (cfg.get("tauri").is_some() || cfg.get("bundle").is_some())
+            {
+                return Some(cfg);
             }
             idx = abs_start + 8;
         }
@@ -142,8 +155,9 @@ impl TauriScanner {
         bytes: &[u8],
         out_dir: &Path,
     ) -> Result<Vec<String>, Box<dyn Error>> {
-        fs::create_dir_all(out_dir)?;
+        let output = security_io::ExtractionRoot::create(out_dir)?;
         let mut extracted = Vec::new();
+        let mut total_extracted_bytes = 0usize;
         let text = String::from_utf8_lossy(bytes);
 
         // Scan for HTML documents
@@ -159,8 +173,11 @@ impl TauriScanner {
                 } else {
                     format!("page_{}.html", html_count)
                 };
-                let out_file = out_dir.join(&file_name);
-                fs::write(&out_file, html_content.as_bytes())?;
+                claim_asset_bytes(&mut total_extracted_bytes, html_content.len())?;
+                std::io::Write::write_all(
+                    &mut output.create_new_file(Path::new(&file_name))?,
+                    html_content.as_bytes(),
+                )?;
                 extracted.push(file_name);
                 html_count += 1;
                 idx = end;
@@ -174,19 +191,37 @@ impl TauriScanner {
         if extracted.is_empty() {
             let mut cursor = 0;
             let mut chunk_id = 0;
+            let mut probes = 0;
             while cursor + 4 < bytes.len() {
+                if probes == MAX_BROTLI_PROBES {
+                    return Err(
+                        "Brotli heuristic probe budget exhausted; asset extraction incomplete"
+                            .into(),
+                    );
+                }
+                probes += 1;
                 // Heuristic probe for brotli decompressed asset
                 let mut decompressed = Vec::new();
                 let sub = &bytes[cursor..std::cmp::min(cursor + 512 * 1024, bytes.len())];
-                if let Ok(_) = brotli::BrotliDecompress(&mut std::io::Cursor::new(sub), &mut decompressed) {
-                    if decompressed.starts_with(b"<!DOCTYPE html>") || decompressed.starts_with(b"<html") {
-                        let file_name = format!("brotli_decompressed_{}.html", chunk_id);
-                        fs::write(out_dir.join(&file_name), &decompressed)?;
-                        extracted.push(file_name);
-                        chunk_id += 1;
-                        cursor += sub.len();
-                        continue;
-                    }
+                let mut decoder = brotli::Decompressor::new(std::io::Cursor::new(sub), 4096);
+                if (&mut decoder)
+                    .take(16 * 1024 * 1024 + 1)
+                    .read_to_end(&mut decompressed)
+                    .is_ok()
+                    && decompressed.len() <= 16 * 1024 * 1024
+                    && (decompressed.starts_with(b"<!DOCTYPE html>")
+                        || decompressed.starts_with(b"<html"))
+                {
+                    claim_asset_bytes(&mut total_extracted_bytes, decompressed.len())?;
+                    let file_name = format!("brotli_decompressed_{}.html", chunk_id);
+                    std::io::Write::write_all(
+                        &mut output.create_new_file(Path::new(&file_name))?,
+                        &decompressed,
+                    )?;
+                    extracted.push(file_name);
+                    chunk_id += 1;
+                    cursor += sub.len();
+                    continue;
                 }
                 cursor += 4096;
             }
@@ -240,8 +275,11 @@ impl TauriScanner {
         findings
     }
 
-    pub fn audit_path(path: &Path, extract_to: Option<&Path>) -> Result<TauriAuditResult, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+    pub fn audit_path(
+        path: &Path,
+        extract_to: Option<&Path>,
+    ) -> Result<TauriAuditResult, Box<dyn Error>> {
+        let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
         let info = Self::detect_binary(&bytes);
         let config = Self::extract_config(&bytes);
         let extracted_files = if let Some(out) = extract_to {
@@ -268,6 +306,8 @@ impl TauriScanner {
 mod tests {
     use super::*;
 
+    use std::fs;
+
     #[test]
     fn test_detect_tauri_and_ipc() {
         let sample = r#"
@@ -283,9 +323,21 @@ mod tests {
 
         let findings = TauriScanner::scan_ipc(sample, Some("app.js"));
         assert_eq!(findings.len(), 3);
-        assert!(findings.iter().any(|f| f.kind == "invoke" && f.name == "get_user_info"));
-        assert!(findings.iter().any(|f| f.kind == "listen" && f.name == "system_event"));
-        assert!(findings.iter().any(|f| f.kind == "emit" && f.name == "user_login"));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "invoke" && f.name == "get_user_info")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "listen" && f.name == "system_event")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == "emit" && f.name == "user_login")
+        );
     }
 
     #[test]
@@ -295,5 +347,57 @@ mod tests {
         assert!(cfg.is_some());
         let val = cfg.unwrap();
         assert_eq!(val["tauri"]["windows"][0]["title"], "App");
+    }
+
+    #[test]
+    fn extracted_assets_use_exclusive_output_capability() {
+        let output = std::env::temp_dir().join(format!(
+            "rea-fast-tauri-out-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let fixture = b"prefix<!DOCTYPE html><html><body>safe</body></html>suffix";
+        assert_eq!(
+            TauriScanner::extract_embedded_assets(fixture, &output).unwrap(),
+            vec!["index.html"]
+        );
+        assert_eq!(
+            fs::read(output.join("index.html")).unwrap(),
+            b"<!DOCTYPE html><html><body>safe</body></html>"
+        );
+        assert!(TauriScanner::extract_embedded_assets(fixture, &output).is_err());
+        fs::remove_dir_all(&output).unwrap();
+    }
+
+    #[test]
+    fn brotli_heuristic_budget_refuses_to_claim_complete_extraction() {
+        let output = std::env::temp_dir().join(format!(
+            "rea-fast-tauri-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let adversarial = vec![0u8; MAX_BROTLI_PROBES * 4096 + 1024];
+        let error = TauriScanner::extract_embedded_assets(&adversarial, &output)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("probe budget exhausted"), "{error}");
+        fs::remove_dir_all(output).unwrap();
+    }
+
+    #[test]
+    fn cumulative_tauri_output_budget_prevents_disk_expansion() {
+        let mut total = 0;
+        claim_asset_bytes(&mut total, MAX_TAURI_EXTRACT_BYTES - 1).unwrap();
+        assert_eq!(total, MAX_TAURI_EXTRACT_BYTES - 1);
+        let error = claim_asset_bytes(&mut total, 2).err().unwrap().to_string();
+        assert!(error.contains("exceeds 128 MiB"), "{error}");
+        assert_eq!(total, MAX_TAURI_EXTRACT_BYTES - 1);
     }
 }

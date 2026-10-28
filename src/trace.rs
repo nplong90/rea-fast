@@ -134,16 +134,16 @@ impl<'a> ApplicationFeatureTracer<'a> {
                 SeedKind::String | SeedKind::Route | SeedKind::Channel => {
                     // Check imports / exports / symbols
                     for imp in &file.imports {
-                        if let Some(src) = &imp.source {
-                            if seed.matches(src) {
-                                matched_seeds.push(MatchedSeed {
-                                    kind: seed.kind.clone(),
-                                    matched_value: src.clone(),
-                                    file: file.path.clone(),
-                                    node_id: None,
-                                });
-                                file_matched = true;
-                            }
+                        if let Some(src) = &imp.source
+                            && seed.matches(src)
+                        {
+                            matched_seeds.push(MatchedSeed {
+                                kind: seed.kind.clone(),
+                                matched_value: src.clone(),
+                                file: file.path.clone(),
+                                node_id: None,
+                            });
+                            file_matched = true;
                         }
                     }
                     for exp in &file.exports {
@@ -196,35 +196,39 @@ impl<'a> ApplicationFeatureTracer<'a> {
             }
 
             // Also search inside semantic graph if available
-            if let Some(sg_map) = self.semantic_graphs {
-                if let Some(sg) = sg_map.get(&file.path) {
-                    for node in &sg.nodes {
-                        let matches_node = match seed.kind {
-                            SeedKind::NodeId => seed.matches(&node.id),
-                            SeedKind::String | SeedKind::Route => {
-                                node.value.as_ref().is_some_and(|v| seed.matches(v))
-                                    || seed.matches(&node.name)
-                            }
-                            SeedKind::Channel => {
-                                node.class == semantics::SemanticNodeClass::Event
-                                    && (seed.matches(&node.name)
-                                        || node.value.as_ref().is_some_and(|v| seed.matches(v)))
-                            }
-                            SeedKind::Module => node.class == semantics::SemanticNodeClass::Module && seed.matches(&node.name),
-                            SeedKind::NativeExport => {
-                                node.class == semantics::SemanticNodeClass::Boundary && seed.matches(&node.name)
-                            }
-                        };
-
-                        if matches_node {
-                            matched_seeds.push(MatchedSeed {
-                                kind: seed.kind.clone(),
-                                matched_value: node.name.clone(),
-                                file: file.path.clone(),
-                                node_id: Some(node.id.clone()),
-                            });
-                            file_matched = true;
+            if let Some(sg_map) = self.semantic_graphs
+                && let Some(sg) = sg_map.get(&file.path)
+            {
+                for node in &sg.nodes {
+                    let matches_node = match seed.kind {
+                        SeedKind::NodeId => seed.matches(&node.id),
+                        SeedKind::String | SeedKind::Route => {
+                            node.value.as_ref().is_some_and(|v| seed.matches(v))
+                                || seed.matches(&node.name)
                         }
+                        SeedKind::Channel => {
+                            node.class == semantics::SemanticNodeClass::Event
+                                && (seed.matches(&node.name)
+                                    || node.value.as_ref().is_some_and(|v| seed.matches(v)))
+                        }
+                        SeedKind::Module => {
+                            node.class == semantics::SemanticNodeClass::Module
+                                && seed.matches(&node.name)
+                        }
+                        SeedKind::NativeExport => {
+                            node.class == semantics::SemanticNodeClass::Boundary
+                                && seed.matches(&node.name)
+                        }
+                    };
+
+                    if matches_node {
+                        matched_seeds.push(MatchedSeed {
+                            kind: seed.kind.clone(),
+                            matched_value: node.name.clone(),
+                            file: file.path.clone(),
+                            node_id: Some(node.id.clone()),
+                        });
+                        file_matched = true;
                     }
                 }
             }
@@ -265,19 +269,19 @@ impl<'a> ApplicationFeatureTracer<'a> {
 
             let mut neighbors = Vec::new();
 
-            if matches!(direction, TraceDirection::Outgoing | TraceDirection::Both) {
-                if let Some(targets) = forward_dep.get(&curr_idx) {
-                    for &target_idx in targets {
-                        neighbors.push((target_idx, "imports"));
-                    }
+            if matches!(direction, TraceDirection::Outgoing | TraceDirection::Both)
+                && let Some(targets) = forward_dep.get(&curr_idx)
+            {
+                for &target_idx in targets {
+                    neighbors.push((target_idx, "imports"));
                 }
             }
 
-            if matches!(direction, TraceDirection::Incoming | TraceDirection::Both) {
-                if let Some(sources) = backward_dep.get(&curr_idx) {
-                    for &src_idx in sources {
-                        neighbors.push((src_idx, "imported-by"));
-                    }
+            if matches!(direction, TraceDirection::Incoming | TraceDirection::Both)
+                && let Some(sources) = backward_dep.get(&curr_idx)
+            {
+                for &src_idx in sources {
+                    neighbors.push((src_idx, "imported-by"));
                 }
             }
 
@@ -371,7 +375,10 @@ mod tests {
     fn traces_feature_seed_across_modules() {
         let dummy_loc = Location {
             start: Position { line: 1, column: 0 },
-            end: Position { line: 1, column: 10 },
+            end: Position {
+                line: 1,
+                column: 10,
+            },
             byte_start: 0,
             byte_end: 10,
         };

@@ -8,6 +8,7 @@ use crate::{
     mobile::{AndroidPackageInfo, MobileInspector},
     native_binary::{BinaryLayout, GoBuildInfo, NativeInspector, RustBinaryInfo, WasmInterface},
     secrets::SecretScanner,
+    security_io::{self, MAX_ANALYSIS_FILE_BYTES, MAX_SOURCE_FILE_BYTES},
     sourcemap::SourceMapExtractor,
     storage_pcap::{PcapCaptureInfo, SqliteDbInfo, StoragePcapInspector},
     tauri::TauriScanner,
@@ -16,12 +17,16 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use std::{
     error::Error,
-    fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::Instant,
 };
+
+static PIPELINE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -103,7 +108,7 @@ pub struct PipelineReport {
 }
 
 fn sha256_file(path: &Path) -> Result<String, Box<dyn Error>> {
-    let bytes = fs::read(path)?;
+    let bytes = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES)?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
@@ -116,6 +121,7 @@ fn is_supported_js_ts(path: &Path) -> bool {
 
 fn collect_js_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     let mut files = Vec::new();
+    let mut budget = security_io::ProjectBudget::default();
     for entry in WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
@@ -128,6 +134,7 @@ fn collect_js_files(root: &Path) -> Result<Vec<PathBuf>, Box<dyn Error>> {
     {
         let entry = entry?;
         if entry.file_type().is_some_and(|t| t.is_file()) && is_supported_js_ts(entry.path()) {
+            budget.claim_path(entry.path())?;
             files.push(entry.into_path());
         }
     }
@@ -154,13 +161,13 @@ impl AuditPipeline {
                 "pcap" | "pcapng" | "cap" => return TargetKind::PcapCapture,
                 "js" | "mjs" | "cjs" => {
                     // Check if bundle or single source
-                    if let Ok(content) = fs::read_to_string(path) {
-                        if content.contains("webpackChunk")
+                    if let Ok(content) =
+                        security_io::read_string_limited(path, MAX_SOURCE_FILE_BYTES)
+                        && (content.contains("webpackChunk")
                             || content.contains("__webpack_require__")
-                            || content.contains("__commonJS")
-                        {
-                            return TargetKind::JavaScriptBundle;
-                        }
+                            || content.contains("__commonJS"))
+                    {
+                        return TargetKind::JavaScriptBundle;
                     }
                     return TargetKind::SingleSourceFile;
                 }
@@ -170,7 +177,7 @@ impl AuditPipeline {
         }
 
         // Check magic bytes
-        if let Ok(bytes) = fs::read(path) {
+        if let Ok(bytes) = security_io::read_limited(path, MAX_ANALYSIS_FILE_BYTES) {
             if bytes.len() >= 4 && &bytes[..4] == b"\0asm" {
                 return TargetKind::WasmArtifact;
             }
@@ -188,7 +195,10 @@ impl AuditPipeline {
                     return TargetKind::PcapCapture;
                 }
             }
-            if bytes.windows(32).any(|w| w == b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX") {
+            if bytes
+                .windows(32)
+                .any(|w| w == b"dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX")
+            {
                 return TargetKind::ElectronBinary;
             }
             if TauriScanner::detect_binary(&bytes).is_tauri {
@@ -235,8 +245,16 @@ impl AuditPipeline {
         let staging_dir = if let Some(out) = custom_out_dir {
             out.to_path_buf()
         } else {
-            std::env::temp_dir().join(format!("rea_pipeline_{}", std::process::id()))
+            std::env::temp_dir().join(format!(
+                "rea_pipeline_{}_{}_{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)?
+                    .as_nanos(),
+                PIPELINE_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ))
         };
+        security_io::create_private_output_directory(&staging_dir)?;
 
         // 1. STAGE: De-packaging & Source Recovery
         let analysis_target_dir = match &target_kind {
@@ -268,9 +286,8 @@ impl AuditPipeline {
                 let bundle_dest = staging_dir.join("recovered_modules");
                 let recoverer =
                     SourceRecoverer::new(ExtractionMode::Structural, RewriteLevel::Standard);
-                if let Ok(res) = recoverer.recover(&target_canonical, &bundle_dest) {
-                    recovered_modules_count = res.recovered_modules.len();
-                }
+                let res = recoverer.recover(&target_canonical, &bundle_dest)?;
+                recovered_modules_count = res.recovered_modules.len();
 
                 // Check for sourcemap in bundle
                 let sm_dest = staging_dir.join("sourcemap_sources");
@@ -305,7 +322,10 @@ impl AuditPipeline {
                         category: "tauri-ipc".to_string(),
                         severity: Severity::Info,
                         title: format!("Tauri IPC {}: '{}'", ipc.kind, ipc.name),
-                        description: format!("Found Tauri {} call in binary or embedded scripts", ipc.kind),
+                        description: format!(
+                            "Found Tauri {} call in binary or embedded scripts",
+                            ipc.kind
+                        ),
                         file: ipc.file,
                         line: Some(ipc.line),
                     });
@@ -361,23 +381,25 @@ impl AuditPipeline {
                 if let Ok(layout) = NativeInspector::inspect_layout(&target_canonical) {
                     Self::audit_native_layout(&layout, &mut findings);
                 }
-                if let Ok(go_info) = NativeInspector::inspect_go(&target_canonical) {
-                    if go_info.has_go_buildinfo {
-                        stages.push("go-buildinfo-audit".to_string());
-                        Self::audit_go_buildinfo(&go_info, &target_canonical, &mut findings);
-                    }
+                if let Ok(go_info) = NativeInspector::inspect_go(&target_canonical)
+                    && go_info.has_go_buildinfo
+                {
+                    stages.push("go-buildinfo-audit".to_string());
+                    Self::audit_go_buildinfo(&go_info, &target_canonical, &mut findings);
                 }
-                if let Ok(rust_info) = NativeInspector::inspect_rust(&target_canonical) {
-                    if rust_info.has_rust_auditable {
-                        stages.push("rust-auditable-audit".to_string());
-                        Self::audit_rust_info(&rust_info, &target_canonical, &mut findings);
-                    }
+                if let Ok(rust_info) = NativeInspector::inspect_rust(&target_canonical)
+                    && rust_info.has_rust_auditable
+                {
+                    stages.push("rust-auditable-audit".to_string());
+                    Self::audit_rust_info(&rust_info, &target_canonical, &mut findings);
                 }
                 target_canonical.clone()
             }
             TargetKind::WasmArtifact => {
                 stages.push("wasm-interface-audit".to_string());
-                if let Ok(bytes) = fs::read(&target_canonical) {
+                if let Ok(bytes) =
+                    security_io::read_limited(&target_canonical, MAX_ANALYSIS_FILE_BYTES)
+                {
                     let wasm = NativeInspector::inspect_wasm(&bytes);
                     Self::audit_wasm(&wasm, &target_canonical, &mut findings);
                 }
@@ -449,9 +471,8 @@ impl AuditPipeline {
         // 3. STAGE: Electron Security & IPC Auditing
         stages.push("electron-security-audit".to_string());
         for p in &js_files {
-            if let Ok(source) = fs::read_to_string(p) {
-                let el_findings =
-                    electron::analyze_electron_source(&source, &p.to_string_lossy());
+            if let Ok(source) = security_io::read_string_limited(p, MAX_SOURCE_FILE_BYTES) {
+                let el_findings = electron::analyze_electron_source(&source, &p.to_string_lossy());
                 Self::translate_electron_findings(&el_findings, p, &mut findings);
             }
         }
@@ -459,7 +480,7 @@ impl AuditPipeline {
         // 4. STAGE: Secret Leak & API Endpoint Scanning
         stages.push("secrets-and-endpoints-scan".to_string());
         for p in &js_files {
-            if let Ok(source) = fs::read_to_string(p) {
+            if let Ok(source) = security_io::read_string_limited(p, MAX_SOURCE_FILE_BYTES) {
                 let file_str = p.to_string_lossy().to_string();
                 let secret_res = SecretScanner::scan_str(&source, Some(&file_str));
                 for sec in secret_res.secrets {
@@ -474,7 +495,10 @@ impl AuditPipeline {
                         category: "credential-leak".to_string(),
                         severity: sev,
                         title: format!("{}: {}", sec.rule, sec.matched_masked),
-                        description: format!("High-entropy credential detected (SHA-256: {})", sec.sha256),
+                        description: format!(
+                            "High-entropy credential detected (SHA-256: {})",
+                            sec.sha256
+                        ),
                         file: sec.file,
                         line: Some(sec.line),
                     });
@@ -516,8 +540,10 @@ impl AuditPipeline {
             elapsed_ms: elapsed * 1000.0,
         };
 
-        let mut findings_summary = FindingsSummary::default();
-        findings_summary.total = findings.len();
+        let mut findings_summary = FindingsSummary {
+            total: findings.len(),
+            ..FindingsSummary::default()
+        };
         for f in &findings {
             match f.severity {
                 Severity::Critical => findings_summary.critical += 1,
@@ -540,8 +566,7 @@ impl AuditPipeline {
         let mut full_findings_path = None;
         if findings.len() > 50 {
             let full_path = staging_dir.join("audit_findings_full.json");
-            let _ = fs::create_dir_all(&staging_dir);
-            if let Ok(file) = fs::File::create(&full_path) {
+            if let Ok(file) = security_io::create_new_file(&full_path) {
                 let _ = serde_json::to_writer_pretty(file, &findings);
                 full_findings_path = Some(full_path.to_string_lossy().to_string());
             }
@@ -582,7 +607,8 @@ impl AuditPipeline {
                         line: None,
                     });
                 }
-                if fuse.name == "EnableNodeCliInspectArguments" && fuse.state == FuseState::Enabled {
+                if fuse.name == "EnableNodeCliInspectArguments" && fuse.state == FuseState::Enabled
+                {
                     findings.push(PipelineFinding {
                         category: "fuse-hardening".to_string(),
                         severity: Severity::High,
@@ -696,13 +722,19 @@ impl AuditPipeline {
                 || perm_lower.contains("system_alert_window")
                 || perm_lower.contains("write_settings")
             {
-                (Severity::High, "Sensitive/dangerous system permission requested")
+                (
+                    Severity::High,
+                    "Sensitive/dangerous system permission requested",
+                )
             } else if perm_lower.contains("camera")
                 || perm_lower.contains("fine_location")
                 || perm_lower.contains("read_contacts")
                 || perm_lower.contains("write_external_storage")
             {
-                (Severity::Medium, "Privileged resource access permission requested")
+                (
+                    Severity::Medium,
+                    "Privileged resource access permission requested",
+                )
             } else {
                 (Severity::Info, "Standard Android application permission")
             };
@@ -721,7 +753,10 @@ impl AuditPipeline {
                 category: "android-native".to_string(),
                 severity: Severity::Info,
                 title: format!("Native ABIs: {}", abis.join(", ")),
-                description: format!("Discovered native C/C++ libraries across {} ABIs", abis.len()),
+                description: format!(
+                    "Discovered native C/C++ libraries across {} ABIs",
+                    abis.len()
+                ),
                 file: file_opt,
                 line: None,
             });
@@ -736,7 +771,10 @@ impl AuditPipeline {
             title: format!("Binary Format: {} ({})", layout.format, layout.architecture),
             description: format!(
                 "Sections: {}, Symbols: {}, Entry: 0x{:x}, Imports: {}",
-                layout.total_sections, layout.symbol_count, layout.entry_point, layout.imports.len()
+                layout.total_sections,
+                layout.symbol_count,
+                layout.entry_point,
+                layout.imports.len()
             ),
             file: file_opt.clone(),
             line: None,
@@ -795,7 +833,10 @@ impl AuditPipeline {
                 category: "rustc-compiler".to_string(),
                 severity: Severity::Info,
                 title: format!("Rustc Commit: {}", commit),
-                description: format!("Source build commit: https://github.com/rust-lang/rust/commit/{}", commit),
+                description: format!(
+                    "Source build commit: https://github.com/rust-lang/rust/commit/{}",
+                    commit
+                ),
                 file: Some(file_str.clone()),
                 line: None,
             });
@@ -805,7 +846,9 @@ impl AuditPipeline {
                 category: "cargo-auditable".to_string(),
                 severity: Severity::Info,
                 title: "Cargo Auditable Dependency Bill-of-Materials Present".to_string(),
-                description: "Embedded .dep-v0 section contains complete verifiable dependency tree".to_string(),
+                description:
+                    "Embedded .dep-v0 section contains complete verifiable dependency tree"
+                        .to_string(),
                 file: Some(file_str),
                 line: None,
             });
@@ -820,7 +863,9 @@ impl AuditPipeline {
             title: format!("WebAssembly Module (v{})", wasm.version),
             description: format!(
                 "Sections: {}, Imports: {}, Exports: {}",
-                wasm.sections.len(), wasm.imports.len(), wasm.exports.len()
+                wasm.sections.len(),
+                wasm.imports.len(),
+                wasm.exports.len()
             ),
             file: Some(file_str),
             line: None,
@@ -855,7 +900,10 @@ impl AuditPipeline {
                     category: "sqlite-sensitive-data".to_string(),
                     severity: Severity::Medium,
                     title: format!("Sensitive Table Identified: '{}'", tbl.name),
-                    description: format!("Database contains '{}' table storing credentials or auth data", tbl.name),
+                    description: format!(
+                        "Database contains '{}' table storing credentials or auth data",
+                        tbl.name
+                    ),
                     file: file_opt.clone(),
                     line: None,
                 });
@@ -868,16 +916,24 @@ impl AuditPipeline {
         findings.push(PipelineFinding {
             category: "pcap-capture".to_string(),
             severity: Severity::Info,
-            title: format!("Network Capture: {} ({} packets, {} bytes)", pcap.format, pcap.total_packets, pcap.total_bytes),
+            title: format!(
+                "Network Capture: {} ({} packets, {} bytes)",
+                pcap.format, pcap.total_packets, pcap.total_bytes
+            ),
             description: format!(
                 "Protocols: {}, Unique IPs: {}, Unique Ports: {}",
-                pcap.protocols.join(", "), pcap.unique_ips.len(), pcap.unique_ports.len()
+                pcap.protocols.join(", "),
+                pcap.unique_ips.len(),
+                pcap.unique_ports.len()
             ),
             file: file_opt.clone(),
             line: None,
         });
 
-        if pcap.unique_ports.contains(&80) || pcap.unique_ports.contains(&23) || pcap.unique_ports.contains(&21) {
+        if pcap.unique_ports.contains(&80)
+            || pcap.unique_ports.contains(&23)
+            || pcap.unique_ports.contains(&21)
+        {
             findings.push(PipelineFinding {
                 category: "cleartext-traffic".to_string(),
                 severity: Severity::Medium,
@@ -929,10 +985,24 @@ mod tests {
 
         let report = AuditPipeline::run(&src_file, None).unwrap();
         assert_eq!(report.overall_verdict, "CRITICAL_RISKS_DETECTED");
-        assert!(report.stages_executed.contains(&"secrets-and-endpoints-scan".to_string()));
-        assert!(report.findings.iter().any(|f| f.category == "credential-leak"));
+        assert!(
+            report
+                .stages_executed
+                .contains(&"secrets-and-endpoints-scan".to_string())
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.category == "credential-leak")
+        );
         assert!(report.findings.iter().any(|f| f.category == "api-endpoint"));
-        assert!(report.findings.iter().any(|f| f.category == "webPreferences"));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.category == "webPreferences")
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

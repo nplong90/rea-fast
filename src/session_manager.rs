@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use serde_json::{Value, json};
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::thread;
@@ -10,8 +10,97 @@ pub struct DebuggerSession {
     pub id: String,
     pub kind: String,
     stdin: Arc<Mutex<ChildStdin>>,
-    output_log: Arc<Mutex<Vec<String>>>,
+    output_log: Arc<Mutex<OutputLog>>,
     child: Arc<Mutex<Child>>,
+}
+
+const MAX_DEBUG_SESSIONS: usize = 8;
+const MAX_DEBUG_LOG_LINES: usize = 512;
+const MAX_DEBUG_LINE_BYTES: usize = 8192;
+
+#[derive(Default)]
+struct OutputLog {
+    next_sequence: u64,
+    records: VecDeque<(u64, String)>,
+}
+
+impl OutputLog {
+    fn push(&mut self, message: String) {
+        self.records.push_back((self.next_sequence, message));
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        while self.records.len() > MAX_DEBUG_LOG_LINES {
+            self.records.pop_front();
+        }
+    }
+
+    fn since(&self, sequence: u64) -> Vec<String> {
+        self.records
+            .iter()
+            .filter(|(number, _)| *number >= sequence)
+            .map(|(_, line)| line.clone())
+            .collect()
+    }
+
+    fn recent(&self, count: usize) -> Vec<String> {
+        self.records
+            .iter()
+            .rev()
+            .take(count)
+            .map(|(_, line)| line.clone())
+            .collect()
+    }
+}
+
+/// Drain arbitrary debugger stdout/stderr using bounded line buffers.
+/// A client-controlled line can never occupy more than 8192 bytes in RAM.
+fn collect_debug_output<R: Read>(
+    stream: R,
+    output: &Arc<Mutex<OutputLog>>,
+    prefix: &str,
+) -> io::Result<()> {
+    let mut reader = BufReader::new(stream);
+    let mut line = Vec::new();
+    let mut truncated = false;
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            if !line.is_empty() || truncated {
+                let mut text = format!("{prefix}{}", String::from_utf8_lossy(&line));
+                if truncated {
+                    text.push_str(" [truncated]");
+                }
+                output.lock().unwrap().push(text);
+            }
+            return Ok(());
+        }
+        let newline = buf.iter().position(|byte| *byte == b'\n');
+        let len = newline.unwrap_or(buf.len());
+        let amount = len.min(MAX_DEBUG_LINE_BYTES.saturating_sub(line.len()));
+        line.extend_from_slice(&buf[..amount]);
+        if amount < len {
+            truncated = true;
+        }
+        reader.consume(len + usize::from(newline.is_some()));
+        if newline.is_some() {
+            let mut text = format!("{prefix}{}", String::from_utf8_lossy(&line));
+            if truncated {
+                text.push_str(" [truncated]");
+            }
+            output.lock().unwrap().push(text);
+            line.clear();
+            truncated = false;
+        }
+    }
+}
+
+fn gdb_result_status(lines: &[String]) -> &'static str {
+    if lines.iter().any(|line| line.contains("^error")) {
+        "error"
+    } else if lines.iter().any(|line| line.contains("^done")) {
+        "complete"
+    } else {
+        "unverified"
+    }
 }
 
 static SESSIONS: OnceLock<RwLock<HashMap<String, DebuggerSession>>> = OnceLock::new();
@@ -21,6 +110,15 @@ fn get_sessions() -> &'static RwLock<HashMap<String, DebuggerSession>> {
 }
 
 fn spawn_session(id: String, kind: &str, cmd: &str, args: &[&str]) -> Result<String, String> {
+    let mut sessions = get_sessions().write().unwrap();
+    if sessions.len() >= MAX_DEBUG_SESSIONS {
+        return Err(format!(
+            "Debugger session limit reached ({MAX_DEBUG_SESSIONS})"
+        ));
+    }
+    if sessions.contains_key(&id) {
+        return Err("Debugger session ID already exists".to_string());
+    }
     let mut child = Command::new(cmd)
         .args(args)
         .stdin(Stdio::piped())
@@ -33,24 +131,14 @@ fn spawn_session(id: String, kind: &str, cmd: &str, args: &[&str]) -> Result<Str
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
     let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
-    let output_log = Arc::new(Mutex::new(Vec::new()));
-    let out_clone = Arc::clone(&output_log);
-    let err_clone = Arc::clone(&output_log);
-
+    let output_log = Arc::new(Mutex::new(OutputLog::default()));
+    let stdout_log = Arc::clone(&output_log);
+    let stderr_log = Arc::clone(&output_log);
     thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            let mut l = out_clone.lock().unwrap();
-            l.push(line);
-        }
+        let _ = collect_debug_output(stdout, &stdout_log, "");
     });
-
     thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            let mut l = err_clone.lock().unwrap();
-            l.push(format!("[stderr] {line}"));
-        }
+        let _ = collect_debug_output(stderr, &stderr_log, "[stderr] ");
     });
 
     let session = DebuggerSession {
@@ -61,7 +149,6 @@ fn spawn_session(id: String, kind: &str, cmd: &str, args: &[&str]) -> Result<Str
         child: Arc::new(Mutex::new(child)),
     };
 
-    let mut sessions = get_sessions().write().unwrap();
     sessions.insert(id.clone(), session);
     Ok(id)
 }
@@ -100,12 +187,14 @@ pub fn gdb_console(args: &Value) -> Value {
     let sessions = get_sessions().read().unwrap();
     let session = match sessions.get(session_id) {
         Some(s) => s,
-        None => return json!({ "status": "error", "message": format!("Session {session_id} not found") }),
+        None => {
+            return json!({ "status": "error", "message": format!("Session {session_id} not found") });
+        }
     };
 
     let start_idx = {
         let log = session.output_log.lock().unwrap();
-        log.len()
+        log.next_sequence
     };
 
     {
@@ -121,17 +210,19 @@ pub fn gdb_console(args: &Value) -> Value {
     while start_time.elapsed() < Duration::from_millis(1500) {
         thread::sleep(Duration::from_millis(50));
         let log = session.output_log.lock().unwrap();
-        if log.len() > start_idx {
-            collected = log[start_idx..].to_vec();
-            if collected.iter().any(|l| l.starts_with("^done") || l.starts_with("^error") || l == "(gdb)") {
+        if log.next_sequence > start_idx {
+            collected = log.since(start_idx);
+            if gdb_result_status(&collected) != "unverified" {
                 break;
             }
         }
     }
 
+    let status = gdb_result_status(&collected);
     json!({
-        "status": "complete",
+        "status": status,
         "session_id": session_id,
+        "response_verified": status == "complete",
         "records": collected
     })
 }
@@ -148,7 +239,7 @@ pub fn gdb_session_status(args: &Value) -> Value {
         json!({
             "status": "active",
             "session_id": session_id,
-            "recent_records": log.iter().rev().take(20).cloned().collect::<Vec<_>>()
+            "recent_records": log.recent(20)
         })
     } else {
         json!({ "status": "closed", "session_id": session_id })
@@ -169,6 +260,7 @@ pub fn close_gdb_session(args: &Value) -> Value {
         }
         if let Ok(mut child) = session.child.lock() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         json!({ "status": "closed", "session_id": session_id })
     } else {
@@ -207,12 +299,14 @@ pub fn rizin_debug_command(args: &Value) -> Value {
     let sessions = get_sessions().read().unwrap();
     let session = match sessions.get(session_id) {
         Some(s) => s,
-        None => return json!({ "status": "error", "message": format!("Session {session_id} not found") }),
+        None => {
+            return json!({ "status": "error", "message": format!("Session {session_id} not found") });
+        }
     };
 
     let start_idx = {
         let log = session.output_log.lock().unwrap();
-        log.len()
+        log.next_sequence
     };
 
     {
@@ -223,16 +317,13 @@ pub fn rizin_debug_command(args: &Value) -> Value {
 
     thread::sleep(Duration::from_millis(200));
     let log = session.output_log.lock().unwrap();
-    let collected = if log.len() > start_idx {
-        log[start_idx..].to_vec()
-    } else {
-        Vec::new()
-    };
-
+    let collected = log.since(start_idx);
     json!({
-        "status": "complete",
+        "status": "unverified",
         "session_id": session_id,
-        "output": collected.join("\n")
+        "response_verified": false,
+        "output": collected.join("\n"),
+        "reason": "No Rizin command-completion protocol was observed"
     })
 }
 
@@ -248,7 +339,7 @@ pub fn rizin_debug_session_status(args: &Value) -> Value {
         json!({
             "status": "active",
             "session_id": session_id,
-            "recent_output": log.iter().rev().take(10).cloned().collect::<Vec<_>>()
+            "recent_output": log.recent(10)
         })
     } else {
         json!({ "status": "closed", "session_id": session_id })
@@ -265,6 +356,7 @@ pub fn close_rizin_debug_session(args: &Value) -> Value {
     if let Some(session) = sessions.remove(session_id) {
         if let Ok(mut child) = session.child.lock() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         json!({ "status": "closed", "session_id": session_id })
     } else {
@@ -276,53 +368,36 @@ pub fn close_rizin_debug_session(args: &Value) -> Value {
 // Frida Persistent Session
 // ---------------------------------------------------------
 
-pub fn start_frida_session(args: &Value) -> Value {
-    let session_id = format!("frida_{}", uuid_simple());
+fn unavailable_frida_operation(operation: &str) -> Value {
     json!({
-        "status": "active",
-        "session_id": session_id,
-        "mode": args.get("mode").and_then(|v| v.as_str()).unwrap_or("attach")
+        "status": "unavailable",
+        "operation": operation,
+        "reason": "No Frida process, transport, or instrumentation session is connected"
     })
 }
 
-pub fn frida_session_status(args: &Value) -> Value {
-    let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-    json!({
-        "status": "active",
-        "session_id": session_id,
-        "messages": []
-    })
+pub fn start_frida_session(_args: &Value) -> Value {
+    unavailable_frida_operation("start_frida_session")
+}
+
+pub fn frida_session_status(_args: &Value) -> Value {
+    unavailable_frida_operation("frida_session_status")
 }
 
 pub fn load_frida_script(_args: &Value) -> Value {
-    let script_id = format!("script_{}", uuid_simple());
-    json!({
-        "status": "complete",
-        "script_id": script_id,
-        "loaded": true
-    })
+    unavailable_frida_operation("load_frida_script")
 }
 
 pub fn unload_frida_script(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "unloaded": true
-    })
+    unavailable_frida_operation("unload_frida_script")
 }
 
 pub fn resume_frida_session(_args: &Value) -> Value {
-    json!({
-        "status": "complete",
-        "resumed": true
-    })
+    unavailable_frida_operation("resume_frida_session")
 }
 
-pub fn close_frida_session(args: &Value) -> Value {
-    let session_id = args.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-    json!({
-        "status": "closed",
-        "session_id": session_id
-    })
+pub fn close_frida_session(_args: &Value) -> Value {
+    unavailable_frida_operation("close_frida_session")
 }
 
 fn uuid_simple() -> String {
@@ -339,12 +414,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_lifecycle() {
-        let res = start_frida_session(&json!({ "mode": "attach" }));
-        let id = res.get("session_id").unwrap().as_str().unwrap();
-        let stat = frida_session_status(&json!({ "session_id": id }));
-        assert_eq!(stat.get("status").unwrap().as_str(), Some("active"));
-        let closed = close_frida_session(&json!({ "session_id": id }));
-        assert_eq!(closed.get("status").unwrap().as_str(), Some("closed"));
+    fn debugger_log_is_bounded_and_sequences_do_not_reuse() {
+        let mut log = OutputLog::default();
+        for i in 0..(MAX_DEBUG_LOG_LINES + 25) {
+            log.push(format!("record-{i}"));
+        }
+        assert_eq!(log.records.len(), MAX_DEBUG_LOG_LINES);
+        assert_eq!(log.next_sequence, (MAX_DEBUG_LOG_LINES + 25) as u64);
+        assert_eq!(log.since(log.next_sequence), Vec::<String>::new());
+        assert_eq!(
+            log.recent(1),
+            vec![format!("record-{}", MAX_DEBUG_LOG_LINES + 24)]
+        );
+    }
+
+    #[test]
+    fn debugger_stdout_truncates_long_lines_and_retains_next_line() {
+        let log = Arc::new(Mutex::new(OutputLog::default()));
+        let mut input = vec![b'X'; MAX_DEBUG_LINE_BYTES * 4];
+        input.extend_from_slice(b"\nok\n");
+        collect_debug_output(&input[..], &log, "").unwrap();
+        let output = log.lock().unwrap();
+        assert_eq!(output.records.len(), 2);
+        assert!(output.records[0].1.ends_with("[truncated]"));
+        assert!(output.records[0].1.len() <= MAX_DEBUG_LINE_BYTES + 16);
+        assert_eq!(output.records[1].1, "ok");
+    }
+
+    #[test]
+    fn debugger_completion_requires_protocol_evidence() {
+        assert_eq!(gdb_result_status(&[]), "unverified");
+        assert_eq!(gdb_result_status(&["(gdb)".into()]), "unverified");
+        assert_eq!(gdb_result_status(&["12^done".into()]), "complete");
+        assert_eq!(gdb_result_status(&["12^error,msg=failed".into()]), "error");
+    }
+
+    #[test]
+    fn frida_stub_operations_must_not_fabricate_sessions() {
+        let args = json!({"session_id": "fake", "mode": "attach", "script": "send('hi')"});
+        for output in [
+            start_frida_session(&args),
+            frida_session_status(&args),
+            load_frida_script(&args),
+            unload_frida_script(&args),
+            resume_frida_session(&args),
+            close_frida_session(&args),
+        ] {
+            assert_eq!(output["status"], "unavailable");
+            assert!(output.get("session_id").is_none());
+            assert!(output.get("script_id").is_none());
+            assert!(output.get("loaded").is_none());
+        }
     }
 }

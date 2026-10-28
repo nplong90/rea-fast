@@ -1,7 +1,8 @@
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use regex::Regex;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::{error::Error, fs, path::Path, sync::LazyLock};
+use std::{error::Error, path::Path, sync::LazyLock};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct SecretFinding {
@@ -129,7 +130,9 @@ impl SecretScanner {
 
             // 2. URLs
             for mat in URL_REGEX.find_iter(line) {
-                let url = mat.as_str().trim_end_matches(&[',', ';', ')', '}', ']'][..]);
+                let url = mat
+                    .as_str()
+                    .trim_end_matches(&[',', ';', ')', '}', ']'][..]);
                 endpoints.push(EndpointFinding {
                     url_or_path: url.to_string(),
                     kind: "absolute_url".to_string(),
@@ -167,7 +170,7 @@ impl SecretScanner {
     }
 
     pub fn scan_file(path: &Path) -> Result<SecretScanResult, Box<dyn Error>> {
-        let content = fs::read_to_string(path)?;
+        let content = security_io::read_string_limited(path, MAX_SOURCE_FILE_BYTES)?;
         Ok(Self::scan_str(&content, Some(&path.to_string_lossy())))
     }
 }
@@ -194,7 +197,15 @@ mod tests {
         "#;
         let res = SecretScanner::scan_str(sample, None);
         assert_eq!(res.total_endpoints, 2);
-        assert!(res.endpoints.iter().any(|e| e.url_or_path == "https://api.example.com/v1/users"));
-        assert!(res.endpoints.iter().any(|e| e.url_or_path == "/api/v2/auth/login"));
+        assert!(
+            res.endpoints
+                .iter()
+                .any(|e| e.url_or_path == "https://api.example.com/v1/users")
+        );
+        assert!(
+            res.endpoints
+                .iter()
+                .any(|e| e.url_or_path == "/api/v2/auth/login")
+        );
     }
 }

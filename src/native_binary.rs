@@ -1,10 +1,10 @@
+use flate2::read::ZlibDecoder;
 use object::{Object, ObjectSection, ObjectSymbol};
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{error::Error, fs, path::Path};
-use flate2::read::ZlibDecoder;
 use std::io::Read;
+use std::{error::Error, fs, path::Path};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SectionInfo {
@@ -58,11 +58,41 @@ pub struct WasmInterface {
     pub exports: Vec<String>,
 }
 
+const MAX_NATIVE_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_RUST_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+
+fn decompress_rust_metadata(data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut decoder = ZlibDecoder::new(data);
+    let mut decompressed = Vec::new();
+    (&mut decoder)
+        .take(MAX_RUST_METADATA_BYTES + 1)
+        .read_to_end(&mut decompressed)?;
+    if decompressed.len() as u64 > MAX_RUST_METADATA_BYTES {
+        return Err("Rust .dep-v0 section exceeds 16 MiB decompression limit".into());
+    }
+    Ok(decompressed)
+}
+
+fn read_bounded_artifact(path: &Path) -> Result<Vec<u8>, Box<dyn Error>> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > MAX_NATIVE_ARTIFACT_BYTES {
+        return Err("Native artifact exceeds 256 MiB input limit".into());
+    }
+    // A second bound protects against files growing while they are read.
+    let mut bytes = Vec::new();
+    file.take(MAX_NATIVE_ARTIFACT_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_NATIVE_ARTIFACT_BYTES {
+        return Err("Native artifact grew beyond 256 MiB input limit".into());
+    }
+    Ok(bytes)
+}
+
 pub struct NativeInspector;
 
 impl NativeInspector {
     pub fn inspect_layout(path: &Path) -> Result<BinaryLayout, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let obj_file = object::File::parse(&*bytes)?;
 
@@ -117,7 +147,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_go(path: &Path) -> Result<GoBuildInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         // Scan for Go buildinf signature: \xff Go buildinf:
         let magic = b"\xff Go buildinf:";
         let mut go_version = None;
@@ -155,7 +185,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_rust(path: &Path) -> Result<RustBinaryInfo, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let mut rustc_commit = None;
 
         // Search for /rustc/<40-hex>/
@@ -172,19 +202,16 @@ impl NativeInspector {
 
         if let Ok(obj_file) = object::File::parse(&*bytes) {
             for sec in obj_file.sections() {
-                if sec.name().unwrap_or("") == ".dep-v0" {
-                    if let Ok(data) = sec.data() {
-                        let mut decoder = ZlibDecoder::new(data);
-                        let mut decompressed = Vec::new();
-                        if decoder.read_to_end(&mut decompressed).is_ok() {
-                            if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decompressed) {
-                                return Ok(RustBinaryInfo {
-                                    has_rust_auditable: true,
-                                    raw_json: Some(json),
-                                    rustc_commit,
-                                });
-                            }
-                        }
+                if sec.name().unwrap_or("") == ".dep-v0"
+                    && let Ok(data) = sec.data()
+                {
+                    let decompressed = decompress_rust_metadata(data)?;
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&decompressed) {
+                        return Ok(RustBinaryInfo {
+                            has_rust_auditable: true,
+                            raw_json: Some(json),
+                            rustc_commit,
+                        });
                     }
                 }
             }
@@ -244,11 +271,14 @@ impl NativeInspector {
                 11 => "data",
                 12 => "data_count",
                 _ => "unknown",
-            }.to_string();
+            }
+            .to_string();
 
-            if id == 7 { // Export section
+            if id == 7 {
+                // Export section
                 Self::parse_wasm_exports(sec_data, &mut exports);
-            } else if id == 2 { // Import section
+            } else if id == 2 {
+                // Import section
                 Self::parse_wasm_imports(sec_data, &mut imports);
             }
 
@@ -271,16 +301,22 @@ impl NativeInspector {
     }
 
     fn parse_wasm_exports(data: &[u8], exports: &mut Vec<String>) {
-        if data.is_empty() { return; }
+        if data.is_empty() {
+            return;
+        }
         let mut cur = 0;
         let (count, shift) = read_leb128(&data[cur..]);
         cur += shift;
 
         for _ in 0..count {
-            if cur >= data.len() { break; }
+            if cur >= data.len() {
+                break;
+            }
             let (name_len, s) = read_leb128(&data[cur..]);
             cur += s;
-            if cur + name_len > data.len() { break; }
+            if cur + name_len > data.len() {
+                break;
+            }
             let name = String::from_utf8_lossy(&data[cur..cur + name_len]).to_string();
             cur += name_len;
             if cur < data.len() {
@@ -293,23 +329,33 @@ impl NativeInspector {
     }
 
     fn parse_wasm_imports(data: &[u8], imports: &mut Vec<String>) {
-        if data.is_empty() { return; }
+        if data.is_empty() {
+            return;
+        }
         let mut cur = 0;
         let (count, shift) = read_leb128(&data[cur..]);
         cur += shift;
 
         for _ in 0..count {
-            if cur >= data.len() { break; }
+            if cur >= data.len() {
+                break;
+            }
             let (mod_len, s) = read_leb128(&data[cur..]);
             cur += s;
-            if cur + mod_len > data.len() { break; }
+            if cur + mod_len > data.len() {
+                break;
+            }
             let mod_name = String::from_utf8_lossy(&data[cur..cur + mod_len]).to_string();
             cur += mod_len;
 
-            if cur >= data.len() { break; }
+            if cur >= data.len() {
+                break;
+            }
             let (field_len, s2) = read_leb128(&data[cur..]);
             cur += s2;
-            if cur + field_len > data.len() { break; }
+            if cur + field_len > data.len() {
+                break;
+            }
             let field_name = String::from_utf8_lossy(&data[cur..cur + field_len]).to_string();
             cur += field_len;
 
@@ -317,11 +363,13 @@ impl NativeInspector {
                 let kind = data[cur];
                 cur += 1;
                 match kind {
-                    0 | 1 => { // func or table
+                    0 | 1 => {
+                        // func or table
                         let (_, idx_shift) = read_leb128(&data[cur..]);
                         cur += idx_shift;
                     }
-                    2 => { // memory
+                    2 => {
+                        // memory
                         let (_, idx_shift) = read_leb128(&data[cur..]);
                         cur += idx_shift;
                     }
@@ -354,8 +402,11 @@ impl NativeInspector {
     pub fn inspect_byte_entropy(bytes: &[u8], chunk_size: usize) -> Value {
         let chunk_size = if chunk_size == 0 { 4096 } else { chunk_size };
         let overall_entropy = Self::calculate_entropy(bytes);
-        let mut chunk_entropies = Vec::new();
-        for (i, chunk) in bytes.chunks(chunk_size).enumerate() {
+        // Keep the public number of chunks, but never materialize an
+        // unbounded Vec<Value> when a caller chooses chunk_size = 1.
+        let chunk_count = bytes.len().div_ceil(chunk_size);
+        let mut chunk_entropies = Vec::with_capacity(chunk_count.min(64));
+        for (i, chunk) in bytes.chunks(chunk_size).take(64).enumerate() {
             chunk_entropies.push(json!({
                 "offset": i * chunk_size,
                 "size": chunk.len(),
@@ -376,9 +427,10 @@ impl NativeInspector {
             "total_bytes": bytes.len(),
             "overall_entropy": (overall_entropy * 1000.0).round() / 1000.0,
             "classification": classification,
-            "chunk_count": chunk_entropies.len(),
+            "chunk_count": chunk_count,
             "chunk_size": chunk_size,
-            "chunks": if chunk_entropies.len() > 64 { &chunk_entropies[..64] } else { &chunk_entropies[..] }
+            "chunks_truncated": chunk_count > 64,
+            "chunks": chunk_entropies
         })
     }
 
@@ -392,21 +444,22 @@ impl NativeInspector {
             if b.is_ascii_graphic() || b == b' ' || b == b'\t' {
                 cur.push(b);
             } else {
-                if cur.len() >= min_len {
-                    if let Ok(s) = String::from_utf8(cur.clone()) {
-                        strings.push(s);
-                        if strings.len() >= limit {
-                            break;
-                        }
+                if cur.len() >= min_len
+                    && let Ok(s) = String::from_utf8(cur.clone())
+                {
+                    strings.push(s);
+                    if strings.len() >= limit {
+                        break;
                     }
                 }
                 cur.clear();
             }
         }
-        if cur.len() >= min_len && strings.len() < limit {
-            if let Ok(s) = String::from_utf8(cur) {
-                strings.push(s);
-            }
+        if cur.len() >= min_len
+            && strings.len() < limit
+            && let Ok(s) = String::from_utf8(cur)
+        {
+            strings.push(s);
         }
         strings
     }
@@ -418,16 +471,16 @@ impl NativeInspector {
 
     pub fn list_symbols(path: &Path, limit: usize) -> Result<Vec<String>, Box<dyn Error>> {
         let limit = if limit == 0 { 200 } else { limit };
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let obj = object::File::parse(&*bytes)?;
         let mut symbols = Vec::new();
         for sym in obj.symbols() {
-            if let Ok(name) = sym.name() {
-                if !name.is_empty() {
-                    symbols.push(name.to_string());
-                    if symbols.len() >= limit {
-                        break;
-                    }
+            if let Ok(name) = sym.name()
+                && !name.is_empty()
+            {
+                symbols.push(name.to_string());
+                if symbols.len() >= limit {
+                    break;
                 }
             }
         }
@@ -435,7 +488,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_native_exports(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let obj = object::File::parse(&*bytes)?;
         let mut exports = Vec::new();
         if let Ok(exp_iter) = obj.exports() {
@@ -463,7 +516,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_macho(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let layout = Self::inspect_layout(path)?;
         let is_macho = layout.format.to_lowercase().contains("macho");
@@ -485,7 +538,7 @@ impl NativeInspector {
     }
 
     pub fn list_architectures(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() >= 4 {
             let magic = &bytes[..4];
             if magic == [0xca, 0xfe, 0xba, 0xbe] || magic == [0xbe, 0xba, 0xfe, 0xca] {
@@ -522,10 +575,26 @@ impl NativeInspector {
         let left_imp_set: std::collections::HashSet<_> = left.imports.iter().collect();
         let right_imp_set: std::collections::HashSet<_> = right.imports.iter().collect();
 
-        let added_exports: Vec<_> = right_exp_set.difference(&left_exp_set).copied().cloned().collect();
-        let removed_exports: Vec<_> = left_exp_set.difference(&right_exp_set).copied().cloned().collect();
-        let added_imports: Vec<_> = right_imp_set.difference(&left_imp_set).copied().cloned().collect();
-        let removed_imports: Vec<_> = left_imp_set.difference(&right_imp_set).copied().cloned().collect();
+        let added_exports: Vec<_> = right_exp_set
+            .difference(&left_exp_set)
+            .copied()
+            .cloned()
+            .collect();
+        let removed_exports: Vec<_> = left_exp_set
+            .difference(&right_exp_set)
+            .copied()
+            .cloned()
+            .collect();
+        let added_imports: Vec<_> = right_imp_set
+            .difference(&left_imp_set)
+            .copied()
+            .cloned()
+            .collect();
+        let removed_imports: Vec<_> = left_imp_set
+            .difference(&right_imp_set)
+            .copied()
+            .cloned()
+            .collect();
 
         json!({
             "left_wasm": left.is_wasm,
@@ -543,7 +612,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_il2cpp_metadata(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() < 16 {
             return Err("File too small for IL2CPP metadata".into());
         }
@@ -555,8 +624,16 @@ impl NativeInspector {
             }));
         }
         let version = u32::from_le_bytes(bytes[4..8].try_into()?);
-        let string_literal_offset = if bytes.len() >= 12 { u32::from_le_bytes(bytes[8..12].try_into()?) } else { 0 };
-        let string_literal_size = if bytes.len() >= 16 { u32::from_le_bytes(bytes[12..16].try_into()?) } else { 0 };
+        let string_literal_offset = if bytes.len() >= 12 {
+            u32::from_le_bytes(bytes[8..12].try_into()?)
+        } else {
+            0
+        };
+        let string_literal_size = if bytes.len() >= 16 {
+            u32::from_le_bytes(bytes[12..16].try_into()?)
+        } else {
+            0
+        };
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
 
         Ok(json!({
@@ -575,11 +652,11 @@ impl NativeInspector {
             let mut file_count = 0;
             let mut total_bytes = 0u64;
             for entry in ignore::WalkBuilder::new(path).build().flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_file() {
-                        file_count += 1;
-                        total_bytes += meta.len();
-                    }
+                if let Ok(meta) = entry.metadata()
+                    && meta.is_file()
+                {
+                    file_count += 1;
+                    total_bytes += meta.len();
                 }
             }
             return Ok(json!({
@@ -590,39 +667,43 @@ impl NativeInspector {
             }));
         }
 
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let path_str = path.to_string_lossy().to_string();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
 
         // 1. ASAR
-        if ext == "asar" || (bytes.len() >= 16 && bytes[0..4] == [0x04, 0x00, 0x00, 0x00]) {
-            if let Ok(archive) = crate::asar::AsarArchive::open(path) {
-                return Ok(json!({
-                    "path": path_str,
-                    "artifact_kind": "chromium_asar_archive",
-                    "sha256": sha256,
-                    "total_entries": archive.entries.len(),
-                    "file_size": bytes.len(),
-                }));
-            }
+        if (ext == "asar" || (bytes.len() >= 16 && bytes[0..4] == [0x04, 0x00, 0x00, 0x00]))
+            && let Ok(archive) = crate::asar::AsarArchive::open(path)
+        {
+            return Ok(json!({
+                "path": path_str,
+                "artifact_kind": "chromium_asar_archive",
+                "sha256": sha256,
+                "total_entries": archive.entries.len(),
+                "file_size": bytes.len(),
+            }));
         }
 
         // 2. ZIP / APK
         if bytes.len() >= 4 && &bytes[0..4] == b"PK\x03\x04" {
-            if ext == "apk" || ext == "jar" {
-                if let Ok(apk_info) = crate::mobile::MobileInspector::inspect_apk(path) {
-                    return Ok(json!({
-                        "path": path_str,
-                        "artifact_kind": "android_apk",
-                        "sha256": sha256,
-                        "package_name": apk_info.package_name,
-                        "activities_count": apk_info.activities.len(),
-                        "permissions_count": apk_info.permissions.len(),
-                        "dex_count": apk_info.dex_files.len(),
-                        "total_files": apk_info.total_files,
-                    }));
-                }
+            if (ext == "apk" || ext == "jar")
+                && let Ok(apk_info) = crate::mobile::MobileInspector::inspect_apk(path)
+            {
+                return Ok(json!({
+                    "path": path_str,
+                    "artifact_kind": "android_apk",
+                    "sha256": sha256,
+                    "package_name": apk_info.package_name,
+                    "activities_count": apk_info.activities.len(),
+                    "permissions_count": apk_info.permissions.len(),
+                    "dex_count": apk_info.dex_files.len(),
+                    "total_files": apk_info.total_files,
+                }));
             }
             return Ok(json!({
                 "path": path_str,
@@ -633,31 +714,35 @@ impl NativeInspector {
         }
 
         // 3. SQLite
-        if bytes.len() >= 16 && &bytes[0..16] == b"SQLite format 3\0" {
-            if let Ok(db) = crate::storage_pcap::StoragePcapInspector::inspect_sqlite(path) {
-                return Ok(json!({
-                    "path": path_str,
-                    "artifact_kind": "sqlite_database",
-                    "sha256": sha256,
-                    "tables": db.tables,
-                    "page_size": db.page_size,
-                    "file_size": bytes.len(),
-                }));
-            }
+        if bytes.len() >= 16
+            && &bytes[0..16] == b"SQLite format 3\0"
+            && let Ok(db) = crate::storage_pcap::StoragePcapInspector::inspect_sqlite(path)
+        {
+            return Ok(json!({
+                "path": path_str,
+                "artifact_kind": "sqlite_database",
+                "sha256": sha256,
+                "tables": db.tables,
+                "page_size": db.page_size,
+                "file_size": bytes.len(),
+            }));
         }
 
         // 4. PCAP / PCAPNG
-        if bytes.len() >= 4 && (&bytes[0..4] == &[0xd4, 0xc3, 0xb2, 0xa1] || &bytes[0..4] == &[0xa1, 0xb2, 0xc3, 0xd4] || &bytes[0..4] == &[0x0a, 0x0d, 0x0d, 0x0a]) {
-            if let Ok(pcap) = crate::storage_pcap::StoragePcapInspector::inspect_pcap(path) {
-                return Ok(json!({
-                    "path": path_str,
-                    "artifact_kind": "packet_capture",
-                    "sha256": sha256,
-                    "format": pcap.format,
-                    "total_packets": pcap.total_packets,
-                    "file_size": bytes.len(),
-                }));
-            }
+        if bytes.len() >= 4
+            && (bytes[0..4] == [0xd4, 0xc3, 0xb2, 0xa1]
+                || bytes[0..4] == [0xa1, 0xb2, 0xc3, 0xd4]
+                || bytes[0..4] == [0x0a, 0x0d, 0x0d, 0x0a])
+            && let Ok(pcap) = crate::storage_pcap::StoragePcapInspector::inspect_pcap(path)
+        {
+            return Ok(json!({
+                "path": path_str,
+                "artifact_kind": "packet_capture",
+                "sha256": sha256,
+                "format": pcap.format,
+                "total_packets": pcap.total_packets,
+                "file_size": bytes.len(),
+            }));
         }
 
         // 5. Plist
@@ -673,14 +758,15 @@ impl NativeInspector {
         }
 
         // 6. Unity IL2CPP global-metadata
-        if bytes.len() >= 4 && u32::from_le_bytes(bytes[0..4].try_into().unwrap_or([0; 4])) == 0xFAB11BAF {
-            if let Ok(meta) = Self::inspect_il2cpp_metadata(path) {
-                return Ok(json!({
-                    "path": path_str,
-                    "artifact_kind": "il2cpp_metadata",
-                    "detail": meta,
-                }));
-            }
+        if bytes.len() >= 4
+            && u32::from_le_bytes(bytes[0..4].try_into().unwrap_or([0; 4])) == 0xFAB11BAF
+            && let Ok(meta) = Self::inspect_il2cpp_metadata(path)
+        {
+            return Ok(json!({
+                "path": path_str,
+                "artifact_kind": "il2cpp_metadata",
+                "detail": meta,
+            }));
         }
 
         // 7. WebAssembly
@@ -730,14 +816,26 @@ impl NativeInspector {
     }
 
     pub fn inspect_model_artifact(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let path_str = path.to_string_lossy().to_string();
 
         if bytes.len() >= 4 && &bytes[0..4] == b"GGUF" {
-            let version = if bytes.len() >= 8 { u32::from_le_bytes(bytes[4..8].try_into()?) } else { 0 };
-            let tensor_count = if bytes.len() >= 16 { u64::from_le_bytes(bytes[8..16].try_into()?) } else { 0 };
-            let kv_count = if bytes.len() >= 24 { u64::from_le_bytes(bytes[16..24].try_into()?) } else { 0 };
+            let version = if bytes.len() >= 8 {
+                u32::from_le_bytes(bytes[4..8].try_into()?)
+            } else {
+                0
+            };
+            let tensor_count = if bytes.len() >= 16 {
+                u64::from_le_bytes(bytes[8..16].try_into()?)
+            } else {
+                0
+            };
+            let kv_count = if bytes.len() >= 24 {
+                u64::from_le_bytes(bytes[16..24].try_into()?)
+            } else {
+                0
+            };
             return Ok(json!({
                 "path": path_str,
                 "format": "GGUF",
@@ -751,24 +849,30 @@ impl NativeInspector {
 
         if bytes.len() >= 8 {
             let header_len = u64::from_le_bytes(bytes[0..8].try_into()?) as usize;
-            if header_len > 0 && header_len < 100_000_000 && 8 + header_len <= bytes.len() {
-                if let Ok(val) = serde_json::from_slice::<Value>(&bytes[8..8 + header_len]) {
-                    let tensor_names: Vec<String> = if let Some(map) = val.as_object() {
-                        map.keys().filter(|k| *k != "__metadata__").take(100).cloned().collect()
-                    } else {
-                        Vec::new()
-                    };
-                    return Ok(json!({
-                        "path": path_str,
-                        "format": "SafeTensors",
-                        "header_size": header_len,
-                        "tensor_count": tensor_names.len(),
-                        "metadata": val.get("__metadata__"),
-                        "sample_tensors": tensor_names,
-                        "file_size": bytes.len(),
-                        "sha256": sha256,
-                    }));
-                }
+            if header_len > 0
+                && header_len < 100_000_000
+                && 8 + header_len <= bytes.len()
+                && let Ok(val) = serde_json::from_slice::<Value>(&bytes[8..8 + header_len])
+            {
+                let tensor_names: Vec<String> = if let Some(map) = val.as_object() {
+                    map.keys()
+                        .filter(|k| *k != "__metadata__")
+                        .take(100)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                return Ok(json!({
+                    "path": path_str,
+                    "format": "SafeTensors",
+                    "header_size": header_len,
+                    "tensor_count": tensor_names.len(),
+                    "metadata": val.get("__metadata__"),
+                    "sample_tensors": tensor_names,
+                    "file_size": bytes.len(),
+                    "sha256": sha256,
+                }));
             }
         }
 
@@ -800,44 +904,45 @@ impl NativeInspector {
 
             if app_asar.exists() || path.join("package.json").exists() {
                 framework = "electron";
-                if app_asar.exists() {
-                    if let Ok(asar) = crate::asar::AsarArchive::open(&app_asar) {
-                        details = json!({
-                            "asar_path": app_asar.to_string_lossy(),
-                            "asar_entries": asar.entries.len(),
-                        });
-                    }
+                if app_asar.exists()
+                    && let Ok(asar) = crate::asar::AsarArchive::open(&app_asar)
+                {
+                    details = json!({
+                        "asar_path": app_asar.to_string_lossy(),
+                        "asar_entries": asar.entries.len(),
+                    });
                 }
             } else if tauri_conf.exists() || path.join("src-tauri").exists() {
                 framework = "tauri";
             }
         } else if path.is_file() {
-            if let Ok(tauri_res) = crate::tauri::TauriScanner::audit_path(path, None) {
-                if tauri_res.info.as_ref().map(|i| i.is_tauri).unwrap_or(false) {
-                    framework = "tauri";
-                    details = serde_json::to_value(tauri_res)?;
-                }
+            if let Ok(tauri_res) = crate::tauri::TauriScanner::audit_path(path, None)
+                && tauri_res.info.as_ref().map(|i| i.is_tauri).unwrap_or(false)
+            {
+                framework = "tauri";
+                details = serde_json::to_value(tauri_res)?;
+            }
+            if framework == "unknown_native"
+                && let Ok(fuses) = crate::fuses::inspect_fuses(path)
+                && !fuses.slices.is_empty()
+            {
+                framework = "electron";
+                details = serde_json::to_value(fuses)?;
             }
             if framework == "unknown_native" {
-                if let Ok(fuses) = crate::fuses::inspect_fuses(path) {
-                    if !fuses.slices.is_empty() {
-                        framework = "electron";
-                        details = serde_json::to_value(fuses)?;
-                    }
-                }
-            }
-            if framework == "unknown_native" {
-                let mg = crate::managed::inspect_managed_artifact(&json!({ "path": path.to_string_lossy() }));
+                let mg = crate::managed::inspect_managed_artifact(
+                    &json!({ "path": path.to_string_lossy() }),
+                );
                 if mg["is_managed_cli"].as_bool().unwrap_or(false) {
                     framework = "dotnet_managed";
                     details = mg;
                 }
             }
-            if framework == "unknown_native" {
-                if let Ok(layout) = Self::inspect_layout(path) {
-                    framework = "native_binary";
-                    details = serde_json::to_value(layout)?;
-                }
+            if framework == "unknown_native"
+                && let Ok(layout) = Self::inspect_layout(path)
+            {
+                framework = "native_binary";
+                details = serde_json::to_value(layout)?;
             }
         }
 
@@ -849,7 +954,7 @@ impl NativeInspector {
     }
 
     pub fn inspect_python_pyc(path: &Path) -> Result<Value, Box<dyn Error>> {
-        let bytes = fs::read(path)?;
+        let bytes = read_bounded_artifact(path)?;
         if bytes.len() < 16 {
             return Err("File too small for Python pyc".into());
         }
@@ -884,11 +989,16 @@ impl NativeInspector {
         let cpus = rayon::current_num_threads();
 
         let mut available_tools = Vec::new();
-        for cmd in &["adb", "gdb", "rizin", "frida", "objdump", "tshark", "jadx", "apktool", "strings"] {
+        for cmd in &[
+            "adb", "gdb", "rizin", "frida", "objdump", "tshark", "jadx", "apktool", "strings",
+        ] {
+            // This probe needs only the exit status, never the child output.
             let available = std::process::Command::new("which")
                 .arg(cmd)
-                .output()
-                .map(|o| o.status.success())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
                 .unwrap_or(false);
             if available {
                 available_tools.push(cmd.to_string());
@@ -930,6 +1040,47 @@ fn read_leb128(bytes: &[u8]) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::io::Write;
+
+    #[test]
+    fn compressed_rust_metadata_bomb_is_refused() {
+        use flate2::{Compression, write::ZlibEncoder};
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder
+            .write_all(&vec![0u8; MAX_RUST_METADATA_BYTES as usize + 1])
+            .unwrap();
+        let compressed = encoder.finish().unwrap();
+        assert!(compressed.len() < 1024 * 1024);
+        assert!(decompress_rust_metadata(&compressed).is_err());
+    }
+
+    #[test]
+    fn large_native_files_are_rejected_before_reading_into_memory() {
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("rea_native_{}_{}.bin", std::process::id(), id));
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_NATIVE_ARTIFACT_BYTES + 1).unwrap();
+        assert!(read_bounded_artifact(&path).is_err());
+        assert!(NativeInspector::inspect_layout(&path).is_err());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn entropy_sampling_caps_emitted_chunks_without_losing_true_count() {
+        let data = vec![b'X'; 16_384];
+        let value = NativeInspector::inspect_byte_entropy(&data, 1);
+        assert_eq!(value["total_bytes"], 16_384);
+        assert_eq!(value["chunk_count"], 16_384);
+        assert_eq!(value["chunks"].as_array().unwrap().len(), 64);
+        assert_eq!(value["chunks_truncated"], true);
+        assert_eq!(value["chunks"][0]["offset"], 0);
+        assert_eq!(value["chunks"][63]["offset"], 63);
+    }
 
     #[test]
     fn test_wasm_parsing() {

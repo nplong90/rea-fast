@@ -1,0 +1,12 @@
+{
+  "ipc": [
+    { "side": "main", "operation": "handle", "channel": "settings:read" },
+    { "side": "renderer", "operation": "invoke", "channel": "settings:read" }
+  ],
+  "bridges": [
+    { "api": "settings", "methods": ["read"] }
+  ],
+  "windows": [
+    { "preload": "./preload.js", "contextIsolation": true, "nodeIntegration": false }
+  ]
+}

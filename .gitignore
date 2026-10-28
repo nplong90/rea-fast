@@ -1,3 +1,4 @@
 /target
+/acceptance-artifacts/
 .claude
 reconstructed-source/

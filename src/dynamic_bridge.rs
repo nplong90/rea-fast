@@ -1,17 +1,18 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     env,
     error::Error,
-    fs,
-    io::{Read, Write},
-    net::TcpStream,
-    path::{Path, PathBuf},
+    io::Read,
+    path::PathBuf,
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
+#[cfg(target_os = "linux")]
+use std::{fs, io, path::Path};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdpTarget {
@@ -75,56 +76,97 @@ pub struct LiveProcessDetail {
 
 pub struct DynamicBridge;
 
+const MAX_BRIDGE_STREAM_BYTES: usize = 1024 * 1024;
+#[cfg(target_os = "linux")]
+const MAX_PROC_SNAPSHOT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Procfs files commonly report `st_size = 0`; read a limit+1 sentinel and
+/// refuse oversized snapshots instead of silently returning incomplete data.
+#[cfg(target_os = "linux")]
+fn optional_proc_snapshot(path: &Path) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    match crate::security_io::read_limited(path, MAX_PROC_SNAPSHOT_BYTES) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Err(error.into()),
+        Err(_) => Ok(None), // Process exited or access is restricted.
+    }
+}
+
+#[derive(Default)]
+struct BridgeStreamCapture {
+    bytes: Vec<u8>,
+    truncated: bool,
+    error: Option<String>,
+}
+
+fn capture_bridge_stream<R: Read>(mut input: R) -> BridgeStreamCapture {
+    let mut capture = BridgeStreamCapture::default();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match input.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                let available = MAX_BRIDGE_STREAM_BYTES.saturating_sub(capture.bytes.len());
+                capture.bytes.extend_from_slice(&chunk[..n.min(available)]);
+                if n > available {
+                    capture.truncated = true;
+                }
+                // Drain the rest of the pipe: stopping here could deadlock the
+                // child when it writes into a full OS pipe buffer.
+            }
+            Err(e) => {
+                capture.error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    capture
+}
+
+fn stop_bridge_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    unsafe {
+        // Spawned children have a fresh process group (see below); kill the
+        // entire group, including helpers that inherited stdout/stderr.
+        let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
 impl DynamicBridge {
+    /// All ADB queries share the bounded, timeout-aware provider process path.
+    /// Returning an error on truncated output/nonzero exit prevents a partial
+    /// device inventory from being promoted to complete evidence.
+    fn adb_stdout(arguments: &[&str]) -> Result<String, Box<dyn Error>> {
+        let response =
+            Self::run_optional_bridge("adb", "Install Android platform-tools", arguments, 30);
+        if response["status"] != "ok" {
+            return Err(format!("ADB query did not complete: {response}").into());
+        }
+        response["stdout"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| "ADB query missing stdout".into())
+    }
+
     // ==========================================
     // Chrome DevTools Protocol (CDP) Bridge
     // ==========================================
 
     /// Query loopback Chrome/Electron CDP endpoint (e.g. "http://127.0.0.1:9222" or "127.0.0.1:9222")
     pub fn query_cdp_targets(endpoint: &str) -> Result<Vec<CdpTarget>, Box<dyn Error>> {
-        let (host, port) = Self::parse_host_port(endpoint)?;
-        let addr = format!("{}:{}", host, port);
-        let mut stream = TcpStream::connect_timeout(&addr.parse()?, Duration::from_secs(3))?;
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-
-        let request = format!(
-            "GET /json HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\nUser-Agent: rea-fast\r\n\r\n",
-            host, port
-        );
-        stream.write_all(request.as_bytes())?;
-
-        let mut header_bytes = Vec::new();
-        let mut byte = [0u8; 1];
-        while !header_bytes.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte)?;
-            header_bytes.push(byte[0]);
-            if header_bytes.len() > 16384 {
-                return Err("HTTP header too large".into());
-            }
-        }
-
-        let header_str = String::from_utf8_lossy(&header_bytes);
-        let mut content_length = 0usize;
-        for line in header_str.lines() {
-            if line.to_ascii_lowercase().starts_with("content-length:") {
-                if let Some(val) = line.split(':').nth(1) {
-                    content_length = val.trim().parse().unwrap_or(0);
-                }
-            }
-        }
-
-        let mut body = vec![0u8; content_length];
-        if content_length > 0 {
-            stream.read_exact(&mut body)?;
-        } else {
-            let mut chunk = [0u8; 4096];
-            while let Ok(n) = stream.read(&mut chunk) {
-                if n == 0 { break; }
-                body.extend_from_slice(&chunk[..n]);
-            }
-        }
-
-        let targets: Vec<CdpTarget> = serde_json::from_slice(&body)?;
+        // One bounded parser for both MCP discovery and direct CDP inspection.
+        // The old implementation trusted Content-Length and allocated without
+        // a cap; never reintroduce a second unbounded HTTP reader.
+        let values = crate::cdp::fetch_cdp_targets(endpoint)?;
+        let targets: Vec<CdpTarget> = serde_json::from_value(Value::Array(values))?;
         Ok(targets)
     }
 
@@ -133,11 +175,16 @@ impl DynamicBridge {
         let all = Self::query_cdp_targets(endpoint)?;
         let filtered: Vec<CdpTarget> = all
             .into_iter()
-            .filter(|t| t.url.starts_with("file://") || t.target_type == "page" || t.target_type == "webview")
+            .filter(|t| {
+                t.url.starts_with("file://")
+                    || t.target_type == "page"
+                    || t.target_type == "webview"
+            })
             .collect();
         Ok(filtered)
     }
 
+    #[cfg(test)]
     fn parse_host_port(endpoint: &str) -> Result<(String, u16), Box<dyn Error>> {
         let clean = endpoint
             .trim_start_matches("http://")
@@ -163,14 +210,9 @@ impl DynamicBridge {
 
     /// List connected Android devices via `adb devices -l`
     pub fn list_adb_devices() -> Result<Vec<AdbDevice>, Box<dyn Error>> {
-        let output = Command::new("adb").args(["devices", "-l"]).output()?;
-        if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("adb failed: {}", err).into());
-        }
-
-        let text = String::from_utf8_lossy(&output.stdout);
-        Ok(Self::parse_adb_devices_output(&text))
+        Ok(Self::parse_adb_devices_output(&Self::adb_stdout(&[
+            "devices", "-l",
+        ])?))
     }
 
     pub fn parse_adb_devices_output(output: &str) -> Vec<AdbDevice> {
@@ -218,15 +260,13 @@ impl DynamicBridge {
 
     /// Read system properties from device via `adb shell getprop`
     pub fn inspect_adb_device(serial: Option<&str>) -> Result<AdbDeviceProps, Box<dyn Error>> {
-        let mut cmd = Command::new("adb");
+        let mut arguments = Vec::new();
         if let Some(s) = serial {
-            cmd.args(["-s", s]);
+            arguments.extend(["-s", s]);
         }
-        cmd.args(["shell", "getprop"]);
+        arguments.extend(["shell", "getprop"]);
 
-        let output = cmd.output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
-        let props = Self::parse_getprop_output(&text);
+        let props = Self::parse_getprop_output(&Self::adb_stdout(&arguments)?);
 
         let android_version = props.get("ro.build.version.release").cloned();
         let sdk_version = props.get("ro.build.version.sdk").cloned();
@@ -239,8 +279,16 @@ impl DynamicBridge {
             .get("ro.kernel.qemu")
             .map(|v| v == "1")
             .unwrap_or_else(|| {
-                model.as_deref().unwrap_or("").to_lowercase().contains("emulator")
-                    || model.as_deref().unwrap_or("").to_lowercase().contains("sdk")
+                model
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains("emulator")
+                    || model
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains("sdk")
             });
 
         Ok(AdbDeviceProps {
@@ -260,30 +308,32 @@ impl DynamicBridge {
         let mut map = BTreeMap::new();
         for line in output.lines() {
             let line = line.trim();
-            if line.starts_with('[') && line.contains("]: [") {
-                if let Some(split) = line.find("]: [") {
-                    let key = &line[1..split];
-                    let val = line[split + 4..].trim_end_matches(']');
-                    map.insert(key.to_string(), val.to_string());
-                }
+            if line.starts_with('[')
+                && line.contains("]: [")
+                && let Some(split) = line.find("]: [")
+            {
+                let key = &line[1..split];
+                let val = line[split + 4..].trim_end_matches(']');
+                map.insert(key.to_string(), val.to_string());
             }
         }
         map
     }
 
     /// List installed packages on device via `adb shell pm list packages`
-    pub fn list_adb_packages(serial: Option<&str>, third_party_only: bool) -> Result<Vec<String>, Box<dyn Error>> {
-        let mut cmd = Command::new("adb");
+    pub fn list_adb_packages(
+        serial: Option<&str>,
+        third_party_only: bool,
+    ) -> Result<Vec<String>, Box<dyn Error>> {
+        let mut arguments = Vec::new();
         if let Some(s) = serial {
-            cmd.args(["-s", s]);
+            arguments.extend(["-s", s]);
         }
-        cmd.arg("shell").arg("pm").arg("list").arg("packages");
+        arguments.extend(["shell", "pm", "list", "packages"]);
         if third_party_only {
-            cmd.arg("-3");
+            arguments.push("-3");
         }
-
-        let output = cmd.output()?;
-        let text = String::from_utf8_lossy(&output.stdout);
+        let text = Self::adb_stdout(&arguments)?;
         let mut pkgs = Vec::new();
         for line in text.lines() {
             let line = line.trim();
@@ -300,7 +350,9 @@ impl DynamicBridge {
     // ==========================================
 
     /// List live processes on host system
-    pub fn list_live_processes(filter: Option<&str>) -> Result<Vec<LiveProcessSummary>, Box<dyn Error>> {
+    pub fn list_live_processes(
+        filter: Option<&str>,
+    ) -> Result<Vec<LiveProcessSummary>, Box<dyn Error>> {
         let mut results = Vec::new();
 
         #[cfg(target_os = "linux")]
@@ -311,7 +363,7 @@ impl DynamicBridge {
                     let name_str = name.to_string_lossy();
                     if let Ok(pid) = name_str.parse::<u32>() {
                         let proc_path = entry.path();
-                        let cmdline = fs::read(proc_path.join("cmdline"))
+                        let cmdline = optional_proc_snapshot(&proc_path.join("cmdline"))?
                             .map(|b| {
                                 b.split(|&c| c == 0)
                                     .filter(|s| !s.is_empty())
@@ -321,16 +373,15 @@ impl DynamicBridge {
                             })
                             .unwrap_or_default();
 
-                        let comm = fs::read_to_string(proc_path.join("comm"))
-                            .map(|s| s.trim().to_string())
-                            .unwrap_or_else(|_| name_str.to_string());
+                        let comm = optional_proc_snapshot(&proc_path.join("comm"))?
+                            .map(|s| String::from_utf8_lossy(&s).trim().to_string())
+                            .unwrap_or_else(|| name_str.to_string());
 
-                        if let Some(f) = filter {
-                            if !comm.to_lowercase().contains(&f.to_lowercase())
-                                && !cmdline.to_lowercase().contains(&f.to_lowercase())
-                            {
-                                continue;
-                            }
+                        if let Some(f) = filter
+                            && !comm.to_lowercase().contains(&f.to_lowercase())
+                            && !cmdline.to_lowercase().contains(&f.to_lowercase())
+                        {
+                            continue;
                         }
 
                         results.push(LiveProcessSummary {
@@ -345,24 +396,34 @@ impl DynamicBridge {
 
         #[cfg(not(target_os = "linux"))]
         {
-            let output = Command::new("ps").args(["-e", "-o", "pid,comm"]).output()?;
-            let text = String::from_utf8_lossy(&output.stdout);
+            let response = Self::run_optional_bridge(
+                "ps",
+                "Install a ps-compatible process lister",
+                &["-e", "-o", "pid,comm"],
+                10,
+            );
+            if response["status"] != "ok" {
+                return Err(format!("Process listing did not complete: {response}").into());
+            }
+            let text = response["stdout"]
+                .as_str()
+                .ok_or("Process listing missing stdout")?;
             for line in text.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    if let Ok(pid) = parts[0].parse::<u32>() {
-                        let comm = parts[1].to_string();
-                        if let Some(f) = filter {
-                            if !comm.to_lowercase().contains(&f.to_lowercase()) {
-                                continue;
-                            }
-                        }
-                        results.push(LiveProcessSummary {
-                            pid,
-                            name: comm.clone(),
-                            cmdline: comm,
-                        });
+                if parts.len() >= 2
+                    && let Ok(pid) = parts[0].parse::<u32>()
+                {
+                    let comm = parts[1].to_string();
+                    if let Some(f) = filter
+                        && !comm.to_lowercase().contains(&f.to_lowercase())
+                    {
+                        continue;
                     }
+                    results.push(LiveProcessSummary {
+                        pid,
+                        name: comm.clone(),
+                        cmdline: comm,
+                    });
                 }
             }
         }
@@ -381,11 +442,11 @@ impl DynamicBridge {
                 return Err(format!("Process {} not found", pid).into());
             }
 
-            let name = fs::read_to_string(proc_path.join("comm"))
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| format!("pid_{}", pid));
+            let name = optional_proc_snapshot(&proc_path.join("comm"))?
+                .map(|s| String::from_utf8_lossy(&s).trim().to_string())
+                .unwrap_or_else(|| format!("pid_{}", pid));
 
-            let cmdline: Vec<String> = fs::read(proc_path.join("cmdline"))
+            let cmdline: Vec<String> = optional_proc_snapshot(&proc_path.join("cmdline"))?
                 .map(|b| {
                     b.split(|&c| c == 0)
                         .filter(|s| !s.is_empty())
@@ -404,7 +465,8 @@ impl DynamicBridge {
             let mut memory_vmsize_kb = None;
             let mut memory_vmrss_kb = None;
 
-            if let Ok(status) = fs::read_to_string(proc_path.join("status")) {
+            if let Some(status) = optional_proc_snapshot(&proc_path.join("status"))? {
+                let status = String::from_utf8_lossy(&status);
                 for line in status.lines() {
                     let parts: Vec<&str> = line.splitn(2, ':').collect();
                     if parts.len() == 2 {
@@ -415,10 +477,16 @@ impl DynamicBridge {
                             "PPid" => ppid = v.parse::<u32>().ok(),
                             "Threads" => threads = v.parse::<u32>().ok(),
                             "VmSize" => {
-                                memory_vmsize_kb = v.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
+                                memory_vmsize_kb = v
+                                    .split_whitespace()
+                                    .next()
+                                    .and_then(|n| n.parse::<u64>().ok());
                             }
                             "VmRSS" => {
-                                memory_vmrss_kb = v.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
+                                memory_vmrss_kb = v
+                                    .split_whitespace()
+                                    .next()
+                                    .and_then(|n| n.parse::<u64>().ok());
                             }
                             _ => {}
                         }
@@ -428,13 +496,15 @@ impl DynamicBridge {
 
             // Extract mapped dynamic libraries from /proc/{pid}/maps
             let mut mapped_libraries = Vec::new();
-            if let Ok(maps) = fs::read_to_string(proc_path.join("maps")) {
+            let mut seen_libraries = std::collections::HashSet::new();
+            if let Some(maps) = optional_proc_snapshot(&proc_path.join("maps"))? {
+                let maps = String::from_utf8_lossy(&maps);
                 for line in maps.lines() {
                     let parts: Vec<&str> = line.split_whitespace().collect();
                     if parts.len() >= 6 {
                         let path = parts[5];
                         if (path.ends_with(".so") || path.contains(".so."))
-                            && !mapped_libraries.contains(&path.to_string())
+                            && seen_libraries.insert(path)
                         {
                             mapped_libraries.push(path.to_string());
                         }
@@ -478,10 +548,32 @@ impl DynamicBridge {
     // ==========================================
 
     pub fn find_in_path(bin: &str) -> Option<PathBuf> {
+        #[cfg(windows)]
+        let mut names = vec![bin.to_string()];
+        #[cfg(not(windows))]
+        let names = [bin.to_string()];
+        // Unlike Unix, Windows PATH lookups use PATHEXT. Without this, native
+        // executables such as cmd.exe, adb.exe and gdb.exe are falsely reported
+        // as unavailable when callers supply their ordinary extensionless names.
+        #[cfg(windows)]
+        if PathBuf::from(bin).extension().is_none() {
+            let extensions = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+            for ext in extensions.split(';').filter(|ext| !ext.is_empty()) {
+                let ext = if ext.starts_with('.') {
+                    ext.to_string()
+                } else {
+                    format!(".{ext}")
+                };
+                names.push(format!("{bin}{ext}"));
+            }
+        }
         env::var_os("PATH").and_then(|paths| {
-            env::split_paths(&paths)
-                .map(|p| p.join(bin))
-                .find(|p| p.is_file())
+            env::split_paths(&paths).find_map(|directory| {
+                names
+                    .iter()
+                    .map(|name| directory.join(name))
+                    .find(|p| p.is_file())
+            })
         })
     }
 
@@ -502,12 +594,17 @@ impl DynamicBridge {
             }
         };
 
-        let mut child = match Command::new(&bin_path)
+        let mut command = Command::new(&bin_path);
+        command
             .args(args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
         {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = match command.spawn() {
             Ok(c) => c,
             Err(e) => {
                 return json!({
@@ -518,24 +615,20 @@ impl DynamicBridge {
             }
         };
 
-        let mut stdout_handle = child.stdout.take();
-        let mut stderr_handle = child.stderr.take();
-
-        let stdout_thread = thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut stream) = stdout_handle.take() {
-                let _ = stream.read_to_end(&mut buf);
-            }
-            buf
+        let (sender, receiver) = mpsc::channel();
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let stdout_sender = sender.clone();
+        thread::spawn(move || {
+            let capture = stdout_pipe.map(capture_bridge_stream).unwrap_or_default();
+            let _ = stdout_sender.send(("stdout", capture));
         });
-
-        let stderr_thread = thread::spawn(move || {
-            let mut buf = Vec::new();
-            if let Some(mut stream) = stderr_handle.take() {
-                let _ = stream.read_to_end(&mut buf);
-            }
-            buf
+        let stderr_sender = sender.clone();
+        thread::spawn(move || {
+            let capture = stderr_pipe.map(capture_bridge_stream).unwrap_or_default();
+            let _ = stderr_sender.send(("stderr", capture));
         });
+        drop(sender);
 
         let start = Instant::now();
         let timeout = Duration::from_secs(timeout_secs);
@@ -546,21 +639,40 @@ impl DynamicBridge {
                 Ok(Some(s)) => break Ok(s),
                 Ok(None) => {
                     if start.elapsed() >= timeout {
-                        let _ = child.kill();
+                        stop_bridge_process_tree(&mut child);
                         timed_out = true;
                         break child.wait();
                     }
                     thread::sleep(Duration::from_millis(20));
                 }
-                Err(e) => break Err(e),
+                Err(e) => {
+                    stop_bridge_process_tree(&mut child);
+                    let _ = child.wait();
+                    break Err(e);
+                }
             }
         };
 
-        let stdout_bytes = stdout_thread.join().unwrap_or_default();
-        let stderr_bytes = stderr_thread.join().unwrap_or_default();
+        let mut stdout_capture = BridgeStreamCapture::default();
+        let mut stderr_capture = BridgeStreamCapture::default();
+        for _ in 0..2 {
+            match receiver.recv_timeout(Duration::from_secs(2)) {
+                Ok(("stdout", result)) => stdout_capture = result,
+                Ok(("stderr", result)) => stderr_capture = result,
+                Ok(_) => {}
+                Err(_) => {
+                    stop_bridge_process_tree(&mut child);
+                    return json!({
+                        "status": "error",
+                        "tool": bin,
+                        "error": "Bridge output pipes did not close after process termination"
+                    });
+                }
+            }
+        }
 
-        let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
-        let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+        let stdout = String::from_utf8_lossy(&stdout_capture.bytes).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_capture.bytes).to_string();
 
         if timed_out {
             return json!({
@@ -572,9 +684,28 @@ impl DynamicBridge {
             });
         }
 
+        if stdout_capture.truncated || stderr_capture.truncated {
+            return json!({
+                "status": "error", "tool": bin,
+                "error": "Bridge output exceeded 1 MiB per stream",
+                "stdout_truncated": stdout_capture.truncated,
+                "stderr_truncated": stderr_capture.truncated,
+                "stdout": stdout, "stderr": stderr
+            });
+        }
+        if stdout_capture.error.is_some() || stderr_capture.error.is_some() {
+            return json!({
+                "status": "error", "tool": bin,
+                "error": "Bridge output pipe read failed",
+                "stdout_error": stdout_capture.error,
+                "stderr_error": stderr_capture.error,
+                "stdout": stdout, "stderr": stderr
+            });
+        }
+
         match status {
             Ok(exit_status) => json!({
-                "status": "ok",
+                "status": if exit_status.success() { "ok" } else { "error" },
                 "tool": bin,
                 "exit_code": exit_status.code(),
                 "stdout": stdout,
@@ -599,11 +730,21 @@ impl DynamicBridge {
     }
 
     pub fn run_objdump(args: &[&str]) -> Value {
-        Self::run_optional_bridge("objdump", "apt install binutils || brew install binutils", args, 10)
+        Self::run_optional_bridge(
+            "objdump",
+            "apt install binutils || brew install binutils",
+            args,
+            10,
+        )
     }
 
     pub fn run_rizin(args: &[&str]) -> Value {
-        Self::run_optional_bridge("rizin", "apt install rizin || https://github.com/rizinorg/rizin", args, 10)
+        Self::run_optional_bridge(
+            "rizin",
+            "apt install rizin || https://github.com/rizinorg/rizin",
+            args,
+            10,
+        )
     }
 
     pub fn run_sigrok(args: &[&str]) -> Value {
@@ -614,7 +755,12 @@ impl DynamicBridge {
         if Self::find_in_path("jadx").is_some() {
             Self::run_optional_bridge("jadx", "apt install jadx || brew install jadx", args, 30)
         } else {
-            Self::run_optional_bridge("apktool", "apt install apktool || brew install apktool", args, 30)
+            Self::run_optional_bridge(
+                "apktool",
+                "apt install apktool || brew install apktool",
+                args,
+                30,
+            )
         }
     }
 }
@@ -657,7 +803,12 @@ mod tests {
 
     #[test]
     fn test_optional_bridge_unavailable() {
-        let res = DynamicBridge::run_optional_bridge("definitely_non_existent_binary_xyz123", "hint", &[], 1);
+        let res = DynamicBridge::run_optional_bridge(
+            "definitely_non_existent_binary_xyz123",
+            "hint",
+            &[],
+            1,
+        );
         assert_eq!(res["status"], "unavailable");
         assert_eq!(res["tool"], "definitely_non_existent_binary_xyz123");
         assert_eq!(res["install_hint"], "hint");
@@ -665,9 +816,159 @@ mod tests {
 
     #[test]
     fn test_optional_bridge_execution() {
-        let res = DynamicBridge::run_optional_bridge("sh", "none", &["-c", "echo hello_bridge"], 5);
+        let (command, arguments): (&str, &[&str]) = if cfg!(windows) {
+            ("cmd", &["/C", "echo hello_bridge"])
+        } else {
+            ("sh", &["-c", "echo hello_bridge"])
+        };
+        let res = DynamicBridge::run_optional_bridge(command, "none", arguments, 5);
         assert_eq!(res["status"], "ok");
         assert_eq!(res["exit_code"], 0);
         assert!(res["stdout"].as_str().unwrap().contains("hello_bridge"));
+    }
+
+    #[test]
+    fn test_bridge_reader_is_bounded() {
+        let data = vec![b'x'; MAX_BRIDGE_STREAM_BYTES + 17];
+        let capture = capture_bridge_stream(std::io::Cursor::new(data));
+        assert_eq!(capture.bytes.len(), MAX_BRIDGE_STREAM_BYTES);
+        assert!(capture.truncated);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn oversized_proc_snapshot_fails_closed_and_real_procfs_zero_size_reads_work() {
+        let path = std::env::temp_dir().join(format!(
+            "rea-fast-proc-budget-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let file = fs::File::create(&path).unwrap();
+        file.set_len(MAX_PROC_SNAPSHOT_BYTES + 1).unwrap();
+        drop(file);
+        let error = optional_proc_snapshot(&path).err().unwrap().to_string();
+        assert!(error.contains("exceeds"), "{error}");
+        fs::remove_file(&path).unwrap();
+
+        let live = Path::new("/proc/self/comm");
+        assert_eq!(fs::metadata(live).unwrap().len(), 0);
+        assert!(!optional_proc_snapshot(live).unwrap().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_optional_bridge_reports_truncation_as_error() {
+        let res = DynamicBridge::run_optional_bridge(
+            "sh",
+            "none",
+            &["-c", "head -c 1100000 /dev/zero"],
+            5,
+        );
+        assert_eq!(res["status"], "error");
+        assert_eq!(res["stdout_truncated"], true);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_optional_bridge_timeout_cleans_up_descendants() {
+        let start = Instant::now();
+        let res = DynamicBridge::run_optional_bridge(
+            "sh",
+            "none",
+            &["-c", "sleep 60 & echo CHILD_PID=$!; wait"],
+            1,
+        );
+        assert_eq!(res["status"], "timeout");
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        // Merely timing out the parent is insufficient: the grandchild must
+        // stop executing too. A recently killed orphan may briefly be a zombie.
+        #[cfg(target_os = "linux")]
+        {
+            let stdout = res["stdout"].as_str().expect("bridge stdout missing");
+            let pid = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix("CHILD_PID="))
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                .expect("shell did not spawn and report a grandchild");
+            let proc_stat = format!("/proc/{pid}/stat");
+            let running = || {
+                std::fs::read_to_string(&proc_stat)
+                    .ok()
+                    .and_then(|s| s.rsplit_once(") ").map(|(_, rest)| rest.to_string()))
+                    .and_then(|rest| rest.chars().next())
+                    .is_some_and(|state| state != 'Z' && state != 'X')
+            };
+            for _ in 0..40 {
+                if !running() {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            panic!("timed-out bridge left running descendant {pid}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_optional_bridge_timeout_cleans_up_descendants_windows() {
+        let script = "$child = Start-Process -FilePath powershell.exe -ArgumentList '-NoProfile -NonInteractive -Command Start-Sleep -Seconds 60' -PassThru; [Console]::Out.WriteLine('CHILD_PID=' + $child.Id); [Console]::Out.Flush(); Start-Sleep -Seconds 60";
+        let start = Instant::now();
+        let res = DynamicBridge::run_optional_bridge(
+            "powershell.exe",
+            "none",
+            &["-NoProfile", "-NonInteractive", "-Command", script],
+            12,
+        );
+        assert_eq!(res["status"], "timeout", "{res}");
+        assert!(start.elapsed() < Duration::from_secs(20));
+
+        let stdout = res["stdout"].as_str().expect("bridge stdout missing");
+        let pid = stdout
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("CHILD_PID="))
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            .expect("PowerShell did not spawn and report a grandchild");
+
+        let still_running = || {
+            let query = format!(
+                "if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{ exit 9 }} else {{ exit 0 }}"
+            );
+            Command::new("powershell.exe")
+                .args(["-NoProfile", "-NonInteractive", "-Command", &query])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.code() == Some(9))
+                .expect("Unable to query descendant status")
+        };
+        for _ in 0..5 {
+            if !still_running() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+        // Do not leave a stray minute-long child on a failed CI test.
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        panic!("timed-out bridge left running Windows descendant {pid}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_windows_pathext_resolves_cmd() {
+        let path = DynamicBridge::find_in_path("cmd").expect("cmd.exe should be on Windows PATH");
+        assert!(path.is_file());
+        assert!(
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        );
     }
 }

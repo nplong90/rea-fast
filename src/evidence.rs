@@ -1,11 +1,15 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::sync::{OnceLock, RwLock};
 
-/// RFC 8785 JSON Canonicalization Scheme (JCS)
+const MAX_EVIDENCE_BUNDLE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Deterministic JSON encoding for locally stored evidence.
+/// This is not a complete RFC 8785 implementation (notably float formatting).
 pub fn canonicalize_json(val: &Value) -> String {
     match val {
         Value::Null => "null".to_string(),
@@ -17,7 +21,10 @@ pub fn canonicalize_json(val: &Value) -> String {
             format!("[{}]", items.join(","))
         }
         Value::Object(obj) => {
-            let sorted: BTreeMap<&String, &Value> = obj.iter().collect();
+            // RFC 8785 specifies UTF-16 key order, which differs from UTF-8
+            // lexical order for some supplementary-plane characters.
+            let mut sorted: Vec<_> = obj.iter().collect();
+            sorted.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));
             let entries: Vec<String> = sorted
                 .into_iter()
                 .map(|(k, v)| {
@@ -55,15 +62,16 @@ fn get_store() -> &'static RwLock<EvidenceStore> {
 }
 
 pub fn add_record(mut record: Value) -> String {
-    let id = record.get("evidence_id")
+    let id = record
+        .get("evidence_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("ev_{}", digest_value(&record)));
 
-    if record.get("evidence_id").is_none() {
-        if let Some(obj) = record.as_object_mut() {
-            obj.insert("evidence_id".to_string(), json!(id));
-        }
+    if record.get("evidence_id").is_none()
+        && let Some(obj) = record.as_object_mut()
+    {
+        obj.insert("evidence_id".to_string(), json!(id));
     }
     let mut store = get_store().write().unwrap();
     store.records.insert(id.clone(), record);
@@ -76,11 +84,16 @@ pub fn get_record(evidence_id: &str) -> Option<Value> {
 }
 
 pub fn get_evidence_bundle(args: &Value) -> Value {
-    let detail = args.get("detail").and_then(|v| v.as_str()).unwrap_or("complete");
+    let detail = args
+        .get("detail")
+        .and_then(|v| v.as_str())
+        .unwrap_or("complete");
     let store = get_store().read().unwrap();
 
-    let records_vec: Vec<Value> = store.records.values().cloned().collect();
-    let unknowns_vec: Vec<Value> = store.unknowns.values().cloned().collect();
+    let mut records_vec: Vec<Value> = store.records.values().cloned().collect();
+    let mut unknowns_vec: Vec<Value> = store.unknowns.values().cloned().collect();
+    records_vec.sort_by_key(|r| r["evidence_id"].as_str().unwrap_or("").to_string());
+    unknowns_vec.sort_by_key(|u| u["unknown_id"].as_str().unwrap_or("").to_string());
 
     if detail == "summary" {
         json!({
@@ -106,70 +119,220 @@ pub fn get_evidence_bundle(args: &Value) -> Value {
     }
 }
 
+/// Stage the complete export before publishing, never writing through an
+/// existing target symlink or truncating another file on failed output.
 pub fn export_evidence_bundle(args: &Value) -> Value {
-    let path_str = match args.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return json!({ "status": "error", "message": "Missing 'path' argument" }),
+    let path_str = match args.get("path").and_then(Value::as_str) {
+        Some(path) if !path.is_empty() => path,
+        _ => return json!({"status": "error", "message": "Missing 'path' argument"}),
     };
-    let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
-    let p = std::path::Path::new(path_str);
-    if p.exists() && !overwrite {
-        return json!({ "status": "error", "message": format!("File {path_str} already exists. Set overwrite: true to replace.") });
-    }
-
-    let bundle = get_evidence_bundle(&json!({ "detail": "complete" }));
+    let overwrite = args
+        .get("overwrite")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let target = std::path::Path::new(path_str);
+    let Some(name) = target.file_name() else {
+        return json!({"status": "error", "message": "Invalid export destination"});
+    };
+    let bundle = get_evidence_bundle(&json!({"detail": "complete"}));
     let canonical = canonicalize_json(&bundle);
-    if let Err(e) = fs::write(p, canonical) {
-        return json!({ "status": "error", "message": format!("Failed to write bundle: {e}") });
+    if canonical.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return json!({"status": "error", "message": "Evidence export exceeds 64 MiB limit"});
     }
-    json!({ "status": "exported", "path": path_str, "sha256": digest_value(&bundle) })
+    let digest = format!("{:x}", Sha256::digest(canonical.as_bytes()));
+    let suffix = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let stage = target.with_file_name(format!(
+        ".{}.{}.{}.rea-stage",
+        name.to_string_lossy(),
+        std::process::id(),
+        suffix
+    ));
+    let publish = (|| -> std::io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&stage)?;
+        file.write_all(canonical.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        if overwrite {
+            fs::rename(&stage, target)
+        } else {
+            // Atomic, no-clobber publication on the same filesystem.
+            fs::hard_link(&stage, target)
+        }
+    })();
+    let _ = fs::remove_file(&stage);
+    if let Err(error) = publish {
+        return json!({
+            "status": "error",
+            "message": format!("Failed to publish evidence bundle: {error}")
+        });
+    }
+    json!({"status": "exported", "path": path_str, "sha256": digest})
 }
 
 pub fn import_evidence_bundle(args: &Value) -> Value {
-    let path_str = match args.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p,
-        None => return json!({ "status": "error", "message": "Missing 'path' argument" }),
+    let path_str = match args.get("path").and_then(Value::as_str) {
+        Some(path) => path,
+        None => return json!({"status": "error", "message": "Missing 'path' argument"}),
     };
-    let data = match fs::read_to_string(path_str) {
-        Ok(s) => s,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to read file: {e}") }),
+    // A bounded streaming read also resists files growing after open.
+    let file = match fs::File::open(path_str) {
+        Ok(file) => file,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Cannot open bundle: {error}")});
+        }
     };
+    let mut data = String::new();
+    if let Err(error) = file
+        .take(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+        .read_to_string(&mut data)
+    {
+        return json!({"status": "error", "message": format!("Cannot read bundle: {error}")});
+    }
+    if data.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return json!({"status": "error", "message": "Evidence bundle exceeds 64 MiB limit"});
+    }
     let parsed: Value = match serde_json::from_str(&data) {
-        Ok(v) => v,
-        Err(e) => return json!({ "status": "error", "message": format!("Invalid JSON: {e}") }),
+        Ok(value) => value,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid JSON: {error}")});
+        }
     };
+    if !parsed.is_object() {
+        return json!({"status": "error", "message": "Evidence bundle must be a JSON object"});
+    }
+
+    let digest = digest_value(&parsed);
+    if args
+        .get("expected_sha256")
+        .is_some_and(|value| !value.is_string())
+    {
+        return json!({"status": "error", "message": "expected_sha256 must be a string"});
+    }
+    let expected = args.get("expected_sha256").and_then(Value::as_str);
+    if expected.is_some_and(|value| !value.eq_ignore_ascii_case(&digest)) {
+        return json!({
+            "status": "error",
+            "message": "Evidence bundle SHA-256 mismatch",
+            "observed_sha256": digest
+        });
+    }
+
+    let records = match parsed.get("records").and_then(Value::as_array) {
+        Some(records) => records,
+        None => return json!({"status": "error", "message": "Missing/invalid records array"}),
+    };
+    let unknowns = match parsed.get("unknowns").and_then(Value::as_array) {
+        Some(unknowns) => unknowns,
+        None => return json!({"status": "error", "message": "Missing/invalid unknowns array"}),
+    };
+    let mut imported_records = HashMap::<String, Value>::new();
+    let mut imported_unknowns = HashMap::<String, Value>::new();
+    for (entries, key, out) in [
+        (records, "evidence_id", &mut imported_records),
+        (unknowns, "unknown_id", &mut imported_unknowns),
+    ] {
+        for entry in entries {
+            let Some(id) = entry
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+            else {
+                return json!({"status": "error", "message": format!("Evidence entry missing {key}")});
+            };
+            if out.insert(id.to_string(), entry.clone()).is_some() {
+                return json!({"status": "error", "message": format!("Duplicate bundle ID: {id}")});
+            }
+        }
+    }
+
+    for section in [
+        "scenarios",
+        "captures",
+        "artifacts",
+        "providers",
+        "environments",
+    ] {
+        if parsed.get(section).is_some_and(|value| !value.is_array()) {
+            return json!({"status": "error", "message": format!("Invalid {section} array")});
+        }
+    }
 
     let mut store = get_store().write().unwrap();
-    let mut imported_records = 0;
-    if let Some(records) = parsed.get("records").and_then(|r| r.as_array()) {
-        for rec in records {
-            if let Some(id) = rec.get("evidence_id").and_then(|s| s.as_str()) {
-                store.records.insert(id.to_string(), rec.clone());
-                imported_records += 1;
-            }
+    for (id, record) in &imported_records {
+        if store
+            .records
+            .get(id)
+            .is_some_and(|existing| existing != record)
+        {
+            return json!({"status": "error", "message": format!("Conflicting evidence ID: {id}")});
         }
     }
-    let mut imported_unknowns = 0;
-    if let Some(unknowns) = parsed.get("unknowns").and_then(|u| u.as_array()) {
-        for unk in unknowns {
-            if let Some(id) = unk.get("unknown_id").and_then(|s| s.as_str()) {
-                store.unknowns.insert(id.to_string(), unk.clone());
-                imported_unknowns += 1;
-            }
+    for (id, unknown) in &imported_unknowns {
+        if store
+            .unknowns
+            .get(id)
+            .is_some_and(|existing| existing != unknown)
+        {
+            return json!({"status": "error", "message": format!("Conflicting unknown ID: {id}")});
         }
     }
+    // No mutation until the full bundle and every existing-ID collision are checked.
+    let record_count = imported_records.len();
+    let unknown_count = imported_unknowns.len();
+    store.records.extend(imported_records);
+    store.unknowns.extend(imported_unknowns);
+    // Process each section in sequence so the mutable borrows do not overlap.
+    let append_unique = |key: &str, destination: &mut Vec<Value>| {
+        if let Some(items) = parsed.get(key).and_then(Value::as_array) {
+            // Canonical JSON is collision-free as a set key for JSON values,
+            // and avoids O(n^2) duplicate checks on untrusted bundle arrays.
+            let mut seen: HashSet<String> = destination.iter().map(canonicalize_json).collect();
+            for item in items {
+                if seen.insert(canonicalize_json(item)) {
+                    destination.push(item.clone());
+                }
+            }
+        }
+    };
+    append_unique("scenarios", &mut store.scenarios);
+    append_unique("captures", &mut store.captures);
+    append_unique("artifacts", &mut store.artifacts);
+    append_unique("providers", &mut store.providers);
+    append_unique("environments", &mut store.environments);
 
     json!({
         "status": "imported",
-        "imported_records": imported_records,
-        "imported_unknowns": imported_unknowns
+        "imported_records": record_count,
+        "imported_unknowns": unknown_count,
+        "sha256": digest,
+        "digest_verified": expected.is_some(),
+        "authenticity_verified": false
     })
 }
 
 pub fn record_unknown(args: &Value) -> Value {
     let question = args.get("question").and_then(|v| v.as_str()).unwrap_or("");
-    let domain = args.get("domain").and_then(|v| v.as_str()).unwrap_or("general");
-    let severity = args.get("severity").and_then(|v| v.as_str()).unwrap_or("medium");
+    if question.trim().is_empty() {
+        return json!({"status": "error", "message": "Question must be non-empty"});
+    }
+    let domain = args
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general");
+    let severity = args
+        .get("severity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("medium");
     let unknown_id = format!("unk_{:x}", {
         let mut hasher = Sha256::new();
         hasher.update(question.as_bytes());
@@ -192,6 +355,17 @@ pub fn record_unknown(args: &Value) -> Value {
     });
 
     let mut store = get_store().write().unwrap();
+    if let Some(existing) = store.unknowns.get(&unknown_id) {
+        // A repeated observation must not reset its revision or erase a
+        // previously recorded resolution. Detect ambiguous hash inputs too.
+        if existing["question"] == question && existing["domain"] == domain {
+            return existing.clone();
+        }
+        return json!({
+            "status": "error",
+            "message": "Unknown ID collision between different question/domain pairs"
+        });
+    }
     store.unknowns.insert(unknown_id.clone(), record.clone());
     record
 }
@@ -201,11 +375,28 @@ pub fn update_unknown(args: &Value) -> Value {
         Some(id) => id,
         None => return json!({ "status": "error", "message": "Missing unknown_id" }),
     };
-    let expected_rev = args.get("expected_revision").and_then(|v| v.as_u64()).unwrap_or(1);
+    let expected_rev = match args.get("expected_revision") {
+        None => 1,
+        Some(revision) => match revision.as_u64() {
+            Some(value) if value > 0 => value,
+            _ => {
+                return json!({
+                    "status": "error",
+                    "message": "expected_revision must be a positive integer"
+                });
+            }
+        },
+    };
+    if args.get("status").is_some_and(|value| !value.is_string()) {
+        return json!({"status": "error", "message": "status must be a string"});
+    }
 
     let mut store = get_store().write().unwrap();
     if let Some(existing) = store.unknowns.get_mut(unknown_id) {
-        let cur_rev = existing.get("revision").and_then(|v| v.as_u64()).unwrap_or(1);
+        let cur_rev = existing
+            .get("revision")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1);
         if cur_rev != expected_rev {
             return json!({ "status": "stale_revision", "current_revision": cur_rev, "expected_revision": expected_rev });
         }
@@ -232,22 +423,37 @@ pub fn list_unknowns(args: &Value) -> Value {
     let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize;
 
-    let mut matches: Vec<&Value> = store.unknowns.values().filter(|u| {
-        if let Some(sf) = status_filter {
-            if u.get("status").and_then(|s| s.as_str()) != Some(sf) { return false; }
-        }
-        if let Some(sv) = severity_filter {
-            if u.get("severity").and_then(|s| s.as_str()) != Some(sv) { return false; }
-        }
-        if let Some(df) = domain_filter {
-            if u.get("domain").and_then(|s| s.as_str()) != Some(df) { return false; }
-        }
-        true
-    }).collect();
+    let mut matches: Vec<&Value> = store
+        .unknowns
+        .values()
+        .filter(|u| {
+            if let Some(sf) = status_filter
+                && u.get("status").and_then(|s| s.as_str()) != Some(sf)
+            {
+                return false;
+            }
+            if let Some(sv) = severity_filter
+                && u.get("severity").and_then(|s| s.as_str()) != Some(sv)
+            {
+                return false;
+            }
+            if let Some(df) = domain_filter
+                && u.get("domain").and_then(|s| s.as_str()) != Some(df)
+            {
+                return false;
+            }
+            true
+        })
+        .collect();
 
     matches.sort_by_key(|u| u.get("unknown_id").and_then(|s| s.as_str()).unwrap_or(""));
     let total = matches.len();
-    let page: Vec<Value> = matches.into_iter().skip(offset).take(limit).cloned().collect();
+    let page: Vec<Value> = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .cloned()
+        .collect();
 
     json!({
         "total": total,
@@ -264,11 +470,12 @@ pub fn verify_unknown_resolution(args: &Value) -> Value {
     };
     let store = get_store().read().unwrap();
     if let Some(unk) = store.unknowns.get(unknown_id) {
-        let is_resolved = unk.get("status").and_then(|s| s.as_str()) == Some("resolved");
         json!({
             "unknown_id": unknown_id,
-            "status": if is_resolved { "verified" } else { "unresolved" },
-            "evidence_intact": true
+            "status": "unverified",
+            "evidence_intact": null,
+            "declared_status": unk.get("status"),
+            "reason": "Evidence references and the resolution claim have not been authenticated"
         })
     } else {
         json!({ "status": "error", "message": format!("Unknown {unknown_id} not found") })
@@ -278,7 +485,10 @@ pub fn verify_unknown_resolution(args: &Value) -> Value {
 pub fn inspect_analysis_view(args: &Value) -> Value {
     let source = args.get("source");
     let view = args.get("view");
-    let kind = view.and_then(|v| v.get("kind")).and_then(|k| k.as_str()).unwrap_or("summary");
+    let kind = view
+        .and_then(|v| v.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("summary");
 
     let ev_id = source
         .and_then(|s| s.get("evidence_id"))
@@ -302,10 +512,11 @@ pub fn inspect_analysis_view(args: &Value) -> Value {
 }
 
 pub fn compare_artifacts(args: &Value) -> Value {
-    let left = args.get("left");
-    let right = args.get("right");
-    let left_hash = left.map(digest_value).unwrap_or_default();
-    let right_hash = right.map(digest_value).unwrap_or_default();
+    let (Some(left), Some(right)) = (args.get("left"), args.get("right")) else {
+        return json!({"status": "error", "message": "Both 'left' and 'right' are required"});
+    };
+    let left_hash = digest_value(left);
+    let right_hash = digest_value(right);
 
     json!({
         "status": "complete",
@@ -316,21 +527,55 @@ pub fn compare_artifacts(args: &Value) -> Value {
     })
 }
 
+fn read_comparable_bundle(path: &str) -> Result<Value, String> {
+    let file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_EVIDENCE_BUNDLE_BYTES {
+        return Err("Evidence bundle exceeds 64 MiB limit".to_string());
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
+    if !value.is_object()
+        || !value.get("records").is_some_and(Value::is_array)
+        || !value.get("unknowns").is_some_and(Value::is_array)
+    {
+        return Err("Invalid bundle: records and unknowns arrays are required".to_string());
+    }
+    Ok(value)
+}
+
 pub fn compare_bundles(args: &Value) -> Value {
-    let left_path = args.get("left_bundle_path").and_then(|v| v.as_str()).unwrap_or("");
-    let right_path = args.get("right_bundle_path").and_then(|v| v.as_str()).unwrap_or("");
-
-    let left_data = fs::read_to_string(left_path).unwrap_or_default();
-    let right_data = fs::read_to_string(right_path).unwrap_or_default();
-
-    let left_val: Value = serde_json::from_str(&left_data).unwrap_or(json!({}));
-    let right_val: Value = serde_json::from_str(&right_data).unwrap_or(json!({}));
-
+    let (Some(left_path), Some(right_path)) = (
+        args.get("left_bundle_path").and_then(Value::as_str),
+        args.get("right_bundle_path").and_then(Value::as_str),
+    ) else {
+        return json!({"status": "error", "message": "Both bundle paths are required"});
+    };
+    let left = match read_comparable_bundle(left_path) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid left bundle: {error}")});
+        }
+    };
+    let right = match read_comparable_bundle(right_path) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            return json!({"status": "error", "message": format!("Invalid right bundle: {error}")});
+        }
+    };
+    let left_sha256 = digest_value(&left);
+    let right_sha256 = digest_value(&right);
     json!({
         "status": "complete",
-        "left_records": left_val.get("records").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0),
-        "right_records": right_val.get("records").and_then(|r| r.as_array()).map(|a| a.len()).unwrap_or(0),
-        "identical": canonicalize_json(&left_val) == canonicalize_json(&right_val)
+        "comparison_scope": "canonical_bundle_content",
+        "left_records": left["records"].as_array().map_or(0, Vec::len),
+        "right_records": right["records"].as_array().map_or(0, Vec::len),
+        "identical": left_sha256 == right_sha256,
+        "left_sha256": left_sha256,
+        "right_sha256": right_sha256,
+        "evidence_semantic_parity_verified": false
     })
 }
 
@@ -340,39 +585,56 @@ pub fn build_reconstruction_obligation_ledger(args: &Value) -> Value {
     let closure_digest = digest_value(args);
 
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "closure_digest": closure_digest,
         "obligations_count": count,
-        "violations": []
+        "violations": null,
+        "reason": "Obligation validation and evidence authentication are not implemented"
     })
 }
 
 pub fn evaluate_reconstruction_coverage(args: &Value) -> Value {
-    let boundary = args.get("boundary_id").and_then(|v| v.as_str()).unwrap_or("default");
+    let boundary = args
+        .get("boundary_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("default");
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "boundary_id": boundary,
-        "coverage_percentage": 100.0,
-        "uncovered_surfaces": []
+        "coverage_percentage": null,
+        "uncovered_surfaces": null,
+        "reason": "No authenticated coverage inventory was evaluated"
     })
 }
 
 pub fn verify_reconstruction(_args: &Value) -> Value {
     json!({
-        "status": "pass",
-        "claims_verified": true,
-        "violations": []
+        "status": "unavailable",
+        "claims_verified": false,
+        "violations": null,
+        "reason": "Reconstruction verification requires evidence-backed claim evaluation"
     })
 }
 
 pub fn build_call_path(args: &Value) -> Value {
-    let start = args.get("start").and_then(|s| s.get("address")).and_then(|a| a.as_str()).unwrap_or("");
-    let goal = args.get("goal").and_then(|s| s.get("address")).and_then(|a| a.as_str()).unwrap_or("");
+    let start = args
+        .get("start")
+        .and_then(|s| s.get("address"))
+        .and_then(|a| a.as_str())
+        .unwrap_or("");
+    let goal = args
+        .get("goal")
+        .and_then(|s| s.get("address"))
+        .and_then(|a| a.as_str())
+        .unwrap_or("");
     json!({
-        "status": "complete",
-        "path": [start, goal],
-        "distance": if start == goal { 0 } else { 1 },
-        "reachability": "direct"
+        "status": "unavailable",
+        "start": start,
+        "goal": goal,
+        "path": null,
+        "distance": null,
+        "reachability": "unknown",
+        "reason": "No validated call graph was traversed"
     })
 }
 
@@ -382,24 +644,226 @@ pub fn compare_functions(args: &Value) -> Value {
     let left_h = left.map(digest_value).unwrap_or_default();
     let right_h = right.map(digest_value).unwrap_or_default();
     json!({
-        "status": "complete",
-        "identical": left_h == right_h,
-        "structural_similarity": if left_h == right_h { 1.0 } else { 0.5 }
+        "status": "unavailable",
+        "identical_input_payload": left.is_some() && right.is_some() && left_h == right_h,
+        "structural_similarity": null,
+        "reason": "Function bodies, graph structure and equivalence have not been compared"
     })
 }
 
 pub fn find_changed_behavior(args: &Value) -> Value {
     let comparisons = args.get("comparisons").and_then(|c| c.as_array());
     json!({
-        "status": "complete",
+        "status": "unavailable",
         "findings_count": comparisons.map(|c| c.len()).unwrap_or(0),
-        "behavioral_changes": []
+        "behavioral_changes": null,
+        "reason": "Behavioral changes cannot be inferred from comparison count alone"
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evidence_import_rejects_invalid_data_without_partial_mutation() {
+        let unique = format!(
+            "ev_import_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let file = std::env::temp_dir().join(format!("{unique}.json"));
+        let invalid = json!({
+            "records": [{"evidence_id": unique}, {"bad": "missing id"}],
+            "unknowns": []
+        });
+        fs::write(&file, canonicalize_json(&invalid)).unwrap();
+        let failed = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(failed["status"], "error");
+        assert!(get_record(&unique).is_none());
+
+        let valid = json!({
+            "records": [{"evidence_id": unique, "observed": true}],
+            "unknowns": [],
+            "scenarios": [{"source": unique}]
+        });
+        fs::write(&file, canonicalize_json(&valid)).unwrap();
+        let mismatched = import_evidence_bundle(&json!({
+            "path": file,
+            "expected_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        }));
+        assert_eq!(mismatched["status"], "error");
+        assert!(get_record(&unique).is_none());
+
+        let imported = import_evidence_bundle(&json!({
+            "path": file,
+            "expected_sha256": digest_value(&valid)
+        }));
+        assert_eq!(imported["status"], "imported");
+        assert_eq!(imported["digest_verified"], true);
+        assert_eq!(imported["authenticity_verified"], false);
+        assert_eq!(get_record(&unique).unwrap()["observed"], true);
+        assert!(
+            get_evidence_bundle(&json!({}))["scenarios"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["source"] == unique)
+        );
+        let repeated = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(repeated["status"], "imported");
+        let duplicated = get_evidence_bundle(&json!({}))["scenarios"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["source"] == unique)
+            .count();
+        assert_eq!(duplicated, 1);
+
+        let conflicting = json!({
+            "records": [{"evidence_id": unique, "observed": false}],
+            "unknowns": []
+        });
+        fs::write(&file, canonicalize_json(&conflicting)).unwrap();
+        let failed = import_evidence_bundle(&json!({"path": file}));
+        assert_eq!(failed["status"], "error");
+        assert_eq!(get_record(&unique).unwrap()["observed"], true);
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn export_evidence_is_no_clobber_and_roundtrips_with_digest() {
+        let dir = std::env::temp_dir().join(format!(
+            "rea_export_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let target = dir.join("bundle.json");
+        fs::write(&target, b"do not overwrite").unwrap();
+        assert_eq!(
+            export_evidence_bundle(&json!({"path": target}))["status"],
+            "error"
+        );
+        assert_eq!(fs::read(&target).unwrap(), b"do not overwrite");
+        let exported = export_evidence_bundle(&json!({"path": target, "overwrite": true}));
+        assert_eq!(exported["status"], "exported");
+        let imported = import_evidence_bundle(&json!({
+            "path": target,
+            "expected_sha256": exported["sha256"]
+        }));
+        assert_eq!(imported["status"], "imported");
+        assert_eq!(imported["digest_verified"], true);
+        assert_eq!(imported["authenticity_verified"], false);
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn export_evidence_refuses_existing_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!(
+            "rea_export_link_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        fs::write(&victim, b"personal").unwrap();
+        let link = dir.join("bundle.json");
+        symlink(&victim, &link).unwrap();
+        assert_eq!(
+            export_evidence_bundle(&json!({"path": link}))["status"],
+            "error"
+        );
+        assert_eq!(fs::read(&victim).unwrap(), b"personal");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn compare_bundles_rejects_invalid_shape_and_oversize() {
+        let dir = std::env::temp_dir().join(format!(
+            "rea_compare_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let left = dir.join("left.json");
+        let right = dir.join("right.json");
+        fs::write(&left, br#"{"irrelevant": true}"#).unwrap();
+        fs::write(&right, br#"{"records": [], "unknowns": []}"#).unwrap();
+        let args = json!({"left_bundle_path": left, "right_bundle_path": right});
+        assert_eq!(compare_bundles(&args)["status"], "error");
+        fs::File::create(&left)
+            .unwrap()
+            .set_len(MAX_EVIDENCE_BUNDLE_BYTES + 1)
+            .unwrap();
+        assert_eq!(compare_bundles(&args)["status"], "error");
+        fs::write(&left, br#"{"records": [], "unknowns": []}"#).unwrap();
+        let compared = compare_bundles(&args);
+        assert_eq!(compared["status"], "complete");
+        assert_eq!(compared["identical"], true);
+        assert_eq!(compared["evidence_semantic_parity_verified"], false);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn recording_an_existing_unknown_preserves_resolution_revision() {
+        let question = format!("Repeat unknown at {:?}", std::time::SystemTime::now());
+        let first = record_unknown(&json!({"question": question, "domain": "quality"}));
+        let id = first["unknown_id"].as_str().unwrap();
+        let updated = update_unknown(&json!({
+            "unknown_id": id,
+            "expected_revision": 1,
+            "status": "resolved",
+            "resolution": {"note": "Evidence still requires verification"}
+        }));
+        assert_eq!(updated["revision"], 2);
+        assert_eq!(updated["status"], "resolved");
+
+        let repeated = record_unknown(&json!({"question": question, "domain": "quality"}));
+        assert_eq!(repeated["revision"], 2);
+        assert_eq!(repeated["status"], "resolved");
+        assert_eq!(repeated["resolution"], updated["resolution"]);
+
+        let rejected = update_unknown(&json!({
+            "unknown_id": id,
+            "expected_revision": "2",
+            "status": 123
+        }));
+        assert_eq!(rejected["status"], "error");
+        assert_eq!(list_unknowns(&json!({"domain": "quality"}))["total"], 1);
+    }
+
+    #[test]
+    fn ambiguous_unknown_id_is_not_silently_overwritten() {
+        // The current legacy digest encodes question + domain without a
+        // separator. Detect a collision rather than replacing existing data.
+        let first = record_unknown(&json!({"question": "re-ab", "domain": "c"}));
+        let second = record_unknown(&json!({"question": "re-a", "domain": "bc"}));
+        assert_eq!(second["status"], "error");
+        let stored = list_unknowns(&json!({"domain": "c"}));
+        assert!(
+            stored["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| { entry["unknown_id"] == first["unknown_id"] })
+        );
+    }
 
     #[test]
     fn test_canonical_json_sorting() {
@@ -412,7 +876,10 @@ mod tests {
             }
         });
         let canonical = canonicalize_json(&val);
-        assert_eq!(canonical, r#"{"apple":2,"nested":{"alpha":false,"beta":true},"zebra":1}"#);
+        assert_eq!(
+            canonical,
+            r#"{"apple":2,"nested":{"alpha":false,"beta":true},"zebra":1}"#
+        );
     }
 
     #[test]
@@ -432,5 +899,42 @@ mod tests {
             "status": "resolved"
         }));
         assert_eq!(updated.get("status").unwrap().as_str(), Some("resolved"));
+        let verification = verify_unknown_resolution(&json!({"unknown_id": id}));
+        assert_eq!(verification["status"], "unverified");
+        assert!(verification["evidence_intact"].is_null());
+    }
+
+    #[test]
+    fn incomplete_reconstruction_never_claims_success() {
+        assert_eq!(
+            evaluate_reconstruction_coverage(&json!({}))["coverage_percentage"],
+            Value::Null
+        );
+        assert_eq!(verify_reconstruction(&json!({}))["status"], "unavailable");
+        assert_eq!(build_call_path(&json!({}))["reachability"], "unknown");
+        assert!(
+            compare_functions(&json!({"left": {}, "right": {}}))["structural_similarity"].is_null()
+        );
+        assert_eq!(
+            find_changed_behavior(&json!({"comparisons": []}))["status"],
+            "unavailable"
+        );
+        assert_eq!(
+            build_reconstruction_obligation_ledger(&json!({}))["status"],
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn bundle_comparison_refuses_missing_or_invalid_sources() {
+        assert_eq!(compare_artifacts(&json!({}))["status"], "error");
+        assert_eq!(compare_bundles(&json!({}))["status"], "error");
+        let nonexistent =
+            std::env::temp_dir().join(format!("rea_fast_missing_bundle_{}", std::process::id()));
+        let result = compare_bundles(&json!({
+            "left_bundle_path": nonexistent,
+            "right_bundle_path": nonexistent
+        }));
+        assert_eq!(result["status"], "error");
     }
 }

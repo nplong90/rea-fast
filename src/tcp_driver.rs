@@ -1,7 +1,21 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{Read as IoRead, Write as IoWrite};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
+
+const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+
+fn read_http_response_limited(reader: impl IoRead, limit: usize) -> Result<Vec<u8>, String> {
+    let mut response = Vec::new();
+    reader
+        .take(limit as u64 + 1)
+        .read_to_end(&mut response)
+        .map_err(|e| format!("HTTP response read failed: {e}"))?;
+    if response.len() > limit {
+        return Err(format!("HTTP response exceeds {limit} byte limit"));
+    }
+    Ok(response)
+}
 
 /// Check if a local TCP endpoint is active with a strict timeout (default 20ms).
 pub fn probe_endpoint(addr: &str, timeout_ms: u64) -> bool {
@@ -13,30 +27,43 @@ pub fn probe_endpoint(addr: &str, timeout_ms: u64) -> bool {
 }
 
 /// Send a raw HTTP POST request to a local JSON-RPC / MCP server (e.g. JEB on 127.0.0.1:8425)
-pub fn send_raw_http_post(addr: &str, path: &str, body: &Value, timeout_ms: u64) -> Result<Value, String> {
-    let socket_addr: SocketAddr = addr.parse().map_err(|e| format!("Invalid socket address {addr}: {e}"))?;
+pub fn send_raw_http_post(
+    addr: &str,
+    path: &str,
+    body: &Value,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    let socket_addr: SocketAddr = addr
+        .parse()
+        .map_err(|e| format!("Invalid socket address {addr}: {e}"))?;
     let mut stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(timeout_ms))
         .map_err(|e| format!("Connection to {addr} failed: {e}"))?;
 
-    stream.set_read_timeout(Some(Duration::from_millis(timeout_ms * 4)))
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms * 4)))
         .map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(Duration::from_millis(timeout_ms * 2)))
+    stream
+        .set_write_timeout(Some(Duration::from_millis(timeout_ms * 2)))
         .map_err(|e| e.to_string())?;
 
     let body_bytes = serde_json::to_vec(body).map_err(|e| e.to_string())?;
     let request = format!(
         "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        path, addr, body_bytes.len()
+        path,
+        addr,
+        body_bytes.len()
     );
 
-    stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|e| e.to_string())?;
     stream.write_all(&body_bytes).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
-    let mut response = Vec::new();
-    let max_read = 16 * 1024 * 1024; // 16 MiB guard against unbounded OOM
-    stream.take(max_read).read_to_end(&mut response)
-        .map_err(|e| format!("Read error from {addr}: {e}"))?;
+    // Reading exactly the old 16 MiB cap could return a valid JSON prefix of
+    // a larger response and incorrectly claim success. Read one extra byte
+    // and fail closed if the endpoint exceeds the limit.
+    let response = read_http_response_limited(&mut stream, MAX_HTTP_RESPONSE_BYTES)?;
 
     if let Some(pos) = response.windows(4).position(|w| w == b"\r\n\r\n") {
         let body_slice = &response[pos + 4..];
@@ -108,6 +135,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oversized_http_response_cannot_pass_as_valid_json_prefix() {
+        let complete_prefix = b"HTTP/1.1 200 OK\r\n\r\n{\"result\":true}";
+        let mut forged = complete_prefix.to_vec();
+        forged.extend_from_slice(b"one more unexpected byte");
+
+        // The old `.take(limit)` would accept the syntactically valid prefix
+        // and silently omit the trailing response. This is a hard failure.
+        assert!(
+            read_http_response_limited(std::io::Cursor::new(forged), complete_prefix.len())
+                .unwrap_err()
+                .contains("exceeds")
+        );
+
+        assert_eq!(
+            read_http_response_limited(
+                std::io::Cursor::new(complete_prefix),
+                complete_prefix.len()
+            )
+            .unwrap(),
+            complete_prefix
+        );
+    }
+
+    #[test]
     fn test_probe_inactive_port() {
         // Port 59199 is typically unused, connect timeout should quickly return false within 50ms
         let is_up = probe_endpoint("127.0.0.1:59199", 20);
@@ -116,8 +167,16 @@ mod tests {
 
     #[test]
     fn test_unavailable_response_format() {
-        let resp = unavailable_engine_response("Ghidra", "analyze_function", "Install Ghidra headless", "inspect_binary_layout");
-        assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("unavailable"));
+        let resp = unavailable_engine_response(
+            "Ghidra",
+            "analyze_function",
+            "Install Ghidra headless",
+            "inspect_binary_layout",
+        );
+        assert_eq!(
+            resp.get("status").and_then(|s| s.as_str()),
+            Some("unavailable")
+        );
         assert_eq!(resp.get("engine").and_then(|s| s.as_str()), Some("Ghidra"));
         assert!(resp.get("recommended_fallback").is_some());
     }

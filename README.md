@@ -1,87 +1,83 @@
 # rea-fast
 
-High-performance, zero-execution reverse-engineering engine and static analysis toolkit for JavaScript, TypeScript, Electron, and native artifacts. Built natively in Rust.
+Rust-based reverse-engineering toolkit for JavaScript, TypeScript, Electron, and native artifacts, with both static analysis and optional live-runtime integrations.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange.svg)](https://www.rust-lang.org/)
-[![Parity](https://img.shields.io/badge/REA%20Parity-100%25-brightgreen.svg)](#rea-vs-rea-fast-deep-dive)
-[![Zero-Dependency](https://img.shields.io/badge/Dependencies-Zero%20Node%2Fnpm-success.svg)](#)
+[![Status](https://img.shields.io/badge/REA%20Compatibility-partial-yellow.svg)](#rea-compatibility-and-quality)
+[![Runtime](https://img.shields.io/badge/Core-No%20Node.js%20runtime-success.svg)](#)
 
-`rea-fast` delivers the complete analytical capabilities of `@rea/core` with native speed and minimal resource usage:
-- **1,000x faster startup**: ~2.7ms vs ~2,775ms
-- **3,000x faster AST analysis**: ~4ms vs ~12.4s (5 files) | ~103ms vs >226s (447 files)
-- **60x lower memory footprint**: ~4.5MB vs ~304-710MB RAM
-- **113x lighter LLM context**: ~30 KB vs ~3.4 MB payload (Prevents MCP prompt overflow)
-- **Zero runtime dependencies**: Single 5.9MB static ELF binary vs 275MB `node_modules`
+`rea-fast` provides a native core that does not require Node.js at runtime. Its
+compact MCP profile can lower initial tool-list size. It is **not yet a drop-in
+replacement** for the upstream [morluto/rea](https://github.com/morluto/rea).
+An advertised tool name does not imply the same behavior, evidence contract,
+provider support, or platform coverage as upstream.
+The [versioned route contract](tests/acceptance/route-contracts.json) separates
+fixture-backed candidates from experimental, provider-dependent and unavailable
+routes. Even a fixture-backed candidate has **no asserted upstream parity**.
+The [M1 hardening merge plan](plans/rea-fast-merge-readiness/plan.md) and the
+full-equivalence M2 gate are separate; neither is complete merely because CI
+is green.
 
 ---
 
-## Performance & Architecture Comparison: `rea` vs `rea-fast`
+## REA compatibility and quality
 
-```
-1. CLI Engine Startup Latency (Lower is better)
-rea (Node.js)    ████████████████████████████████████████ 2,775 ms
-rea-fast (Rust)  ▌ 2.7 ms [1,013x faster]
+| Area | Upstream `rea` | `rea-fast` today |
+| --- | --- | --- |
+| Runtime | TypeScript/Node.js application and provider adapters | Rust CLI and stdio MCP |
+| JS/Electron static inspection | Extensive evidence-aware workflows | Native structural parser and analysis |
+| Native, managed, mobile and live targets | Multiple complete adapters and provider workflows | Some native inspectors; other tools need external programs or return explicit `unavailable` |
+| MCP tool inventory | Canonical tool contracts with capability/lifecycle handling | 245 catalog entries labeled `native`, `external-provider` or `unavailable` based on audited dispatch routes; **name coverage and route labels are not functional parity** |
+| Quality verification | Broad unit, boundary and integration suites | Rust unit tests; parity and real-provider tests are ongoing |
+| License | MIT at the upstream revision reviewed in October 2026 | MIT |
 
-2. Memory Footprint / RSS (Lower is better)
-rea (Node.js)    ████████████████████████████████████████ 304 - 710 MB
-rea-fast (Rust)  ▌ 4.5 - 12 MB [60x lower memory]
-
-3. AST Analysis: 447 files, 82k LOC (Lower is better)
-rea (Node.js)    ████████████████████████████████████████ > 226,000 ms (> 3.7 mins)
-rea-fast (Rust)  ▌ 103 ms [2,200x faster]
-
-4. MCP Server Tool Prompt Payload (Lower is better)
-rea (Node.js)    ████████████████████████████████████████ 3,423 KB (~850k tokens)
-rea-fast (Core)  ▌ 30.3 KB (~7.5k tokens) [113x lighter context]
-
-5. Disk Space & Distribution Footprint (Lower is better)
-rea (Node.js)    ████████████████████████████████████████ 275 MB (node_modules + engine)
-rea-fast (Rust)  ▌ 5.9 MB (Single standalone binary) [46x smaller]
-```
-
-### Side-by-Side Comparison Matrix
-
-| Feature / Metric | `rea` (Node.js) | `rea-fast` (Native Rust) | Architecture Advantage |
-| :--- | :--- | :--- | :--- |
-| **CLI Startup Latency** | `2,775.2 ms` | **`2.7 ms`** | **1,013x faster** (Instant CLI execution) |
-| **Idle Memory (RSS)** | `304 MB` | **`4.5 MB`** | **67x lighter RAM** |
-| **Peak Analysis Memory** | `> 710 MB` | **`12.0 MB`** | **60x lighter RAM** (No V8 GC thrashing) |
-| **AST Analysis (5 files)** | `12,430 ms` (12.4s) | **`4.08 ms`** | **3,046x faster** |
-| **AST Analysis (447 files)**| `> 226,000 ms` (>3.7m) | **`103.65 ms`** (0.1s) | **2,200x faster** (Rayon multithreading) |
-| **MCP Tool Schema Size** | `3,423 KB` (~850k tokens) | **`30.3 KB`** (~7.5k tokens) | **113x lighter** (No context overflow) |
-| **Catalog Coverage** | 229 tools | **245 tools** (100% parity) | Full catalog + dynamic meta-discovery |
-| **Browser / Electron CDP** | Heavy Playwright runtime | **Zero-dep WebSocket RFC 6455**| Direct Chrome/Brave/Electron control |
-| **Runtime Dependencies** | Node.js, npm, Java, Python | **None (Zero Dependency)** | Single standalone static binary |
-| **Installation Footprint** | `~275 MB` | **`5.9 MB`** | **46x smaller** download & install |
-| **License** | FSL-1.1-MIT | **MIT** | Permissive, enterprise-friendly |
+Performance ratios previously quoted here were not backed by checked-in,
+equivalent end-to-end benchmark runs; they are intentionally not represented
+as verified measurements. A meaningful comparison must use matched inputs,
+hardware, workloads, cold/warm runs, complete output and peak process-family
+memory. See [QUALITY_GOAL.md](QUALITY_GOAL.md) for exit criteria.
 
 ---
 
 ## Features
 
-- **Zero-Execution Architecture**: Pure AST parsing (`oxc_parser`) and structural byte inspection. Executes zero target code. Safe for untrusted artifacts.
+- **Static inspection core**: AST parsing (`oxc_parser`) and byte inspection do not execute analyzed artifacts. Live CDP/debugger tools are a separate, potentially executing capability and must be used intentionally.
 - **Chromium Pickle ASAR Inspection & Safe Extraction**: Fast header parsing, direct offsets, random access file I/O, SHA-256 integrity verification, and directory traversal defense.
+  Extraction refuses pre-existing files and symlinked child paths; in-memory
+  member reads have a 64 MiB cap. Use a fresh private destination directory.
+  Concurrent replacement of parent paths is not yet guarded by directory-FD
+  relative operations, so extraction into shared writable directories is not
+  claimed race-proof.
+- **Streamed ASAR packing**: Uses bounded 64 KiB buffers and verifies each
+  source member again while copying. Writes to an exclusive staging file and
+  publishes only after completion; it refuses an existing destination archive.
 - **Electron Fuse Detection**: Scans 32-byte sentinel patterns across ELF, PE, and Mach-O binaries to extract all 9 Electron fuses without runtime launching.
 - **AST-Based Bundle Recovery**: Unbundles Webpack chunks, Webpack IIFE, Browserify, and esbuild CommonJS wrappers into structured directories.
+  Requires a fresh output directory; existing files and directories are not
+  overwritten. SourceMap recovery follows the same no-clobber policy.
 - **Semantic & Feature Tracing**: Cross-module BFS reachability tracing across imports, exports, functions, IPC events, and API boundaries.
 - **Export Shape Comparison**: Structural JSON pointer diffing between module versions.
 - **Dual Interface**:
   - Full CLI with 45 subcommands.
   - Standard Model Context Protocol (MCP) JSON-RPC 2.0 stdio server (`spec 2024-11-05`):
-    - **Core Profile (default)**: Exposes 43 lean native RE tools (~31 KB payload, ~7.7k tokens) designed for ultra-lean context windows, completely preventing prompt overflows and autocompact thrashing.
-    - **Dynamic Discovery & Execution**: Built-in meta-tools (`rea_search_tools`, `rea_execute_tool`) allow on-demand parameter discovery and execution of the complete 245-tool catalog without flooding the LLM context.
-    - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose the entire 245-tool catalog (sanitized & minified to ~195 KB, stripping redundant `outputSchema`).
-  - 100% standalone and independent: zero Node.js/npm runtime dependencies.
+    - **Core Profile (default)**: Exposes a curated smaller set of RE tool definitions for lower initial context use; some tools require external providers.
+    - **Dynamic Discovery & Execution**: `rea_search_tools` searches all 245 catalog entries and reports each tool's conservative route classification. `rea_execute_tool` attempts dispatch; it does **not** make unavailable or missing-provider functionality work.
+    - **Full Profile**: Pass `--profile full` or set `REA_MCP_PROFILE=full` to expose all 245 catalog entries. Tool descriptions indicate `native`, `external-provider` or `unavailable`, with upstream parity explicitly unverified.
+  - Rust core has no Node.js/npm runtime dependency; many optional integrations do require external tools or services.
+  - Individual MCP stdio requests are capped at 64 MiB. Oversized lines are
+    drained with a JSON-RPC error; send large artifacts by file path. The
+    black-box protocol regression is runnable with `node
+    tests/security/mcp-stdio.mjs --rust-bin target/debug/rea-fast --oversize`.
   - Compile-time gzip schema ingestion (~316 KB embedded) with lazy runtime decompression (<2ms).
   - Raw TCP socket driver (20ms timeout) and structured diagnostic routing with native fallbacks for offline proprietary disassemblers (JEB, Ghidra, Hopper).
-- **Evidence DAG & RFC 8785 Ledger**: Canonical deterministic JSON digesting (`RFC 8785`), in-memory SHA-256 evidence store, residual Unknowns lifecycle tracking, obligation ledgers, and bundle export/import.
+- **Evidence store (partial)**: Deterministically ordered JSON digesting, in-memory SHA-256 records and Unknowns, plus bundle export/import. Full RFC 8785 number formatting, evidence authentication and reconstruction proofs remain open work.
 - **Apple & Harmony Graph Projectors**: Binary `bplist00` and XML plist parser, NSKeyedArchiver deserializer, and dependency graph projection for macOS/iOS `.app` bundles and OpenHarmony HAP applications.
 - **ECMA-335 .NET Managed CLI & IL2CPP Inspector**: Parses BSJB header, `#~` metadata stream, `#Strings`, `#US`, CIL `ldstr` string scanning, and Unity IL2CPP `global-metadata.dat`.
 - **Stateful Debugger MI3 Sessions**: Persistent child process manager for GDB MI3, Rizin, and Frida with background thread pipe draining and non-blocking command execution.
 - **Chrome & Electron CDP Client**: Native zero-dependency TCP/HTTP DevTools Protocol client for targets, DOM/CSS inspection, runtime evaluation, and screenshots.
 - **Universal Artifact & Model Inspector**: Single universal entry point (`inspect_artifact`) detecting ASAR, APK, SQLite, PCAP, Plist, ELF, Mach-O, PE, and WASM; ML model inspector for GGUF, SafeTensors, and TFLite; and Shannon byte-entropy chunk analysis.
-- **Flutter Framework & APK Signature Scheme**: Detects Flutter AOT vs JIT builds (`libapp.so`, `libflutter.so`, assets) and inspects APK v1 JAR signatures and v2/v3 signing blocks.
+- **Flutter Framework & APK Signature Scheme**: Detects Flutter AOT vs JIT indicators (`libapp.so`, `libflutter.so`, assets) and inspects APK v1 JAR signature-file presence and structurally located v2/v3 signing-block IDs. These are **static observations, not cryptographic signature verification**. APK input is capped at 256 MiB; individual ZIP inflation at 64 MiB; declared cumulative uncompressed size at 512 MiB. ZIP64 and multi-disk archives are currently unsupported and fail explicitly.
 - **Chromium Pickle ASAR Repacker**: Pack directory into standard ASAR archive with 512 KiB block-level SHA-256 integrity hashing and 4-byte pickle alignment.
 - **High-Entropy Secrets & API Discovery**: Scans codebases for leaked tokens (AWS, GitHub, Slack, Stripe, JWT, Private Keys) with non-leaking redaction and discovers API route endpoints.
 - **Tauri Application Auditor**: Fingerprint v1/v2 Tauri desktop binaries, extract embedded `tauri.conf.json` via balanced-brace slice parser, recover embedded HTML/Brotli assets, and audit `invoke`/`listen`/`emit` IPC commands.
@@ -99,7 +95,7 @@ rea-fast (Rust)  ▌ 5.9 MB (Single standalone binary) [46x smaller]
 
 ## Installation & Build
 
-Requires Rust toolchain (1.80+ recommended):
+Requires a Rust toolchain supporting edition 2024 (Rust 1.85 or newer):
 
 ```bash
 cargo build --release
@@ -359,12 +355,16 @@ rea-fast mcp
 
 ---
 
-## Benchmark Reproducibility
+## Benchmark methodology (results pending)
 
-Benchmark results measured on Linux x86_64 (Intel Core, 4 threads, 16GB RAM) comparing `rea` (Node v20.x, `@rea/core` v6.8.0) against `rea-fast` v0.1.0:
+Run only with the pinned upstream and fork revisions recorded in
+[QUALITY_GOAL.md](QUALITY_GOAL.md). The command below is an **illustrative
+single-run measurement**, not a published comparison or valid speedup ratio.
+Use current supported Node.js for upstream and the same workload and hardware
+for both engines. Verify semantic output equality before comparing durations.
 
 ```bash
-# 1. Startup benchmark
+# 1. Startup timing illustration (repeat with cold/warm runs)
 python3 -c '
 import subprocess, time
 for name, cmd in [("rea", ["rea", "--version"]), ("rea-fast", ["rea-fast", "--version"])]:
@@ -373,7 +373,7 @@ for name, cmd in [("rea", ["rea", "--version"]), ("rea-fast", ["rea-fast", "--ve
     print(f"{name}: {(time.perf_counter() - t0)*1000:.2f} ms")
 '
 
-# 2. Large JS codebase analysis
+# 2. Resource measurement illustration
 /usr/bin/time -v rea-fast analyze ./path/to/project --format summary
 ```
 

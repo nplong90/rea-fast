@@ -1,0 +1,14 @@
+[
+  {
+    "path": "src/index.js",
+    "sha256": "2d53020a02d0d3bbef6f25da1939bcc73fb048186066d4e6b22686578ed84151",
+    "exports": ["run"],
+    "imports": ["src/math.js"]
+  },
+  {
+    "path": "src/math.js",
+    "sha256": "a15dfe49738f3a322c4a5c04f305a8214ef329279af04d51304400416b83ead6",
+    "exports": ["double"],
+    "imports": []
+  }
+]

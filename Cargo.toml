@@ -20,6 +20,8 @@ regex = "1.13.1"
 brotli = "7"
 object = "0.40.0"
 flate2 = "1.1.10"
+libc = "0.2"
+cap-std = "4.0.3"
 
 [profile.release]
 opt-level = 3

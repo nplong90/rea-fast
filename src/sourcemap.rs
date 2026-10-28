@@ -1,7 +1,9 @@
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use std::fs;
 use std::{
-    fs::{self, File},
     io::Write,
     path::{Component, Path, PathBuf},
 };
@@ -113,9 +115,9 @@ pub fn sanitize_source_path(raw: &str, index: usize) -> PathBuf {
 
     let mut path = PathBuf::new();
     for comp in Path::new(&clean).components() {
-        match comp {
-            Component::Normal(c) => path.push(c),
-            _ => {} // Discard CurDir, ParentDir (..) to prevent path traversal
+        // Discard CurDir, ParentDir (..) to prevent path traversal.
+        if let Component::Normal(c) = comp {
+            path.push(c);
         }
     }
 
@@ -135,12 +137,28 @@ impl SourceMapExtractor {
         origin_path: &str,
         output_dir: &Path,
     ) -> Result<SourceMapExtractResult, Box<dyn std::error::Error>> {
+        if json_str.len() as u64 > MAX_SOURCE_FILE_BYTES {
+            return Err("SourceMap JSON exceeds source-size limit".into());
+        }
         let sm: SourceMapV3 = serde_json::from_str(json_str)?;
         let mut warnings = Vec::new();
         let mut extracted_files = Vec::new();
         let mut total_bytes = 0;
 
-        fs::create_dir_all(output_dir)?;
+        // Fail before publishing any output if a map would exceed the budget.
+        let requested_bytes: u64 = sm
+            .sources_content
+            .iter()
+            .flat_map(|contents| contents.iter())
+            .filter_map(|content| content.as_ref())
+            .try_fold(0u64, |total, content| {
+                total.checked_add(content.len() as u64)
+            })
+            .ok_or("SourceMap source content size overflow")?;
+        if requested_bytes > MAX_SOURCE_FILE_BYTES {
+            return Err("SourceMap extracted content exceeds source-size limit".into());
+        }
+        let output = security_io::ExtractionRoot::create(output_dir)?;
 
         if let Some(contents) = &sm.sources_content {
             for (idx, source_path) in sm.sources.iter().enumerate() {
@@ -154,18 +172,13 @@ impl SourceMapExtractor {
                 };
 
                 let rel_path = sanitize_source_path(source_path, idx);
-                let target_path = output_dir.join(&rel_path);
-
-                if let Some(parent) = target_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
 
                 let bytes = content_str.as_bytes();
                 let hash = sha256_hex(bytes);
                 let size = bytes.len();
                 total_bytes += size;
 
-                let mut f = File::create(&target_path)?;
+                let mut f = output.create_new_file(&rel_path)?;
                 f.write_all(bytes)?;
 
                 extracted_files.push(ExtractedSource {
@@ -194,15 +207,16 @@ impl SourceMapExtractor {
         input_path: &Path,
         output_dir: &Path,
     ) -> Result<SourceMapExtractResult, Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(input_path)?;
+        let content = security_io::read_string_limited(input_path, MAX_SOURCE_FILE_BYTES)?;
 
         // Case 1: Direct JSON map
         if input_path.extension().and_then(|s| s.to_str()) == Some("map")
-            || content.trim_start().starts_with('{')
+            || (content.trim_start().starts_with('{')
+                && serde_json::from_str::<SourceMapV3>(&content).is_ok())
         {
-            if let Ok(res) = Self::extract_from_json(&content, &input_path.to_string_lossy(), output_dir) {
-                return Ok(res);
-            }
+            // Output errors must propagate; do not silently reinterpret a
+            // valid map as JavaScript and hide an unsafe destination.
+            return Self::extract_from_json(&content, &input_path.to_string_lossy(), output_dir);
         }
 
         // Case 2: Inline Base64 Data URI in JS/TS: //# sourceMappingURL=data:application/json;base64,...
@@ -224,7 +238,9 @@ impl SourceMapExtractor {
                             output_dir,
                         );
                     }
-                    Err(err) => return Err(format!("Failed to decode inline base64 map: {}", err).into()),
+                    Err(err) => {
+                        return Err(format!("Failed to decode inline base64 map: {}", err).into());
+                    }
                 }
             }
         }
@@ -242,8 +258,13 @@ impl SourceMapExtractor {
             if !map_name.is_empty() && !map_name.starts_with("data:") {
                 let map_path = input_path.parent().unwrap_or(Path::new(".")).join(map_name);
                 if map_path.exists() {
-                    let map_content = fs::read_to_string(&map_path)?;
-                    return Self::extract_from_json(&map_content, &map_path.to_string_lossy(), output_dir);
+                    let map_content =
+                        security_io::read_string_limited(&map_path, MAX_SOURCE_FILE_BYTES)?;
+                    return Self::extract_from_json(
+                        &map_content,
+                        &map_path.to_string_lossy(),
+                        output_dir,
+                    );
                 }
             }
         }
@@ -272,6 +293,7 @@ mod tests {
 
         let temp_dir = std::env::temp_dir().join("rea_fast_sm_test");
         let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
         let out_dir = temp_dir.join("sources");
 
         let res = SourceMapExtractor::extract_from_json(sample_map, "test.map", &out_dir).unwrap();
@@ -284,6 +306,57 @@ mod tests {
         assert!(content.contains("export function add"));
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn refuses_existing_output_without_modifying_user_file() {
+        let root =
+            std::env::temp_dir().join(format!("rea-fast-sm-no-clobber-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("out/src")).unwrap();
+        let target = root.join("out/src/app.js");
+        fs::write(&target, "personal content").unwrap();
+        let map = r#"{"version":3,"sources":["src/app.js"],"sourcesContent":["overwrite"]}"#;
+        assert!(SourceMapExtractor::extract_from_json(map, "test.map", &root.join("out")).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "personal content");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_external_sourcemap_is_rejected_before_extraction() {
+        let root =
+            std::env::temp_dir().join(format!("rea-fast-sm-external-bound-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("bundle.js"),
+            "//# sourceMappingURL=oversized.map\n",
+        )
+        .unwrap();
+        fs::File::create(root.join("oversized.map"))
+            .unwrap()
+            .set_len(MAX_SOURCE_FILE_BYTES + 1)
+            .unwrap();
+
+        assert!(SourceMapExtractor::extract(&root.join("bundle.js"), &root.join("out")).is_err());
+        assert!(!root.join("out").exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlinked_output_parent() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!("rea-fast-sm-link-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("safe")).unwrap();
+        symlink(root.join("safe"), root.join("link")).unwrap();
+        let map = r#"{"version":3,"sources":["app.js"],"sourcesContent":["data"]}"#;
+        assert!(
+            SourceMapExtractor::extract_from_json(map, "test.map", &root.join("link/out")).is_err()
+        );
+        assert!(!root.join("safe/out").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

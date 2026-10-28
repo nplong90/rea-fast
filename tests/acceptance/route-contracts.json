@@ -1,0 +1,2213 @@
+{
+  "schema_version": 1,
+  "scope": "M1-partial-not-upstream-drop-in",
+  "upstream_commit": "6de60993b861266e63a4e70d5c6d9a8073f7cd92",
+  "notice": "A route and a passing narrow fixture do not establish full upstream parity.",
+  "tools": [
+    {
+      "name": "address_name",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "address_to_file_offset",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "analyze_electron_source",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "analyze_function",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "analyze_javascript_application",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "analyze_swift_types",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "analyze_web_bundle",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "annotate_native_function",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "audit_tauri",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "batch_decompile",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "binary_overview",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "binary_session",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "build_call_path",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "build_reconstruction_obligation_ledger",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_adb_screen",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_browser_scenario",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_electron_scenario",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_native_ui_scenario",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_process_scenario",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "capture_web_screenshot",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "close_binary",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "close_frida_session",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "close_gdb_session",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "gdb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "close_rizin_debug_session",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "collect_adb_bugreport",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "comment",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_application_versions",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_artifacts",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_bundles",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_functions",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_javascript_export_shapes",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_managed_members",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_process_captures",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_source_to_bundle",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_wasm_interfaces",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_web_captures",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "compare_web_screenshots",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "correlate_static_and_runtime",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "current_address",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "current_document",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "current_procedure",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "cutter_command",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decode_android_resources",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decode_interface_builder",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decode_signal_recording",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "sigrok",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decode_signal_sigrok",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "sigrok",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decompile_all",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decompile_apktool_jadx",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "jadx-or-apktool",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "decompile_jeb_item",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "jeb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "demangle_swift",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "swift-toolchain",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "discover_webmcp_tools",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "evaluate_reconstruction_coverage",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "execute_frida",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "frida",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "execute_gdb",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "gdb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "execute_rizin",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "execute_rizin_command",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "export_environment_bundle",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "export_evidence_bundle",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "export_web_scripts",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "extract_artifact",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "extract_firmware",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "extract_sourcemap",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "find_changed_behavior",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "find_xrefs_to_name",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "frida_session_status",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "gdb_console",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "gdb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "gdb_session_status",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "gdb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "get_call_graph",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "get_evidence_bundle",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "get_navigation_context",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "get_objc_classes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "get_objc_protocols",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "goto_address",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "identify_flutter_build",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "import_evidence_bundle",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "import_managed_reconstruction",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inline_comment",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_adb_client",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_adb_device",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_adb_display",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_adb_package",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_adb_window",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_address_context",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_analysis_settings",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_analysis_view",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_android_class",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_android_method",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_android_package",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_apk_signature",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_apktool_client",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_apple_ips",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_artifact",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_asar",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_asset_catalog",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_binary_layout",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_byte_entropy",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_dart_aot",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_desktop_application",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_devicetree",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_electron_fuses",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_electron_page",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_elf_notes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_erlang_beam",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_evm_interface",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_firmware_regions",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_go_binary",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_gpu_code_objects",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_il2cpp_metadata",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_jeb_client",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "jeb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_kernel_module",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_keyed_archive",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_live_process",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "operating-system-process-interface",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_macho",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_managed_artifact",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_managed_members",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_managed_native_boundaries",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_model_artifact",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_api",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_data_type",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_dispatch_metadata",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_exports",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_instruction",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_native_load_image",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_packet_capture",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_packet_fields",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pcap_capture",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pcap_client",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pe_certificates",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pe_imports",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pe_load_config",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_pe_resources",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_plist",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_python_pyc",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_recorded_crash",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_rust_binary",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_signal_decoders",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_signature",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_sqlite_database",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_wasm_artifact",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_web_event_listeners",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_web_network_capture",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_web_page",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "inspect_with_objdump",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "objdump",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "install_adb_package",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "instrument_with_frida",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_devices",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_directory",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_features",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_packages",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_processes",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_adb_services",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_architectures",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_bookmarks",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_browser_targets",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_cutter_sessions",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_documents",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_electron_targets",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "cdp",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_frida_devices",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_frida_processes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_javascript_runtime_targets",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_jeb_units",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "jeb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_live_processes",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "operating-system-process-interface",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_names",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_procedures",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_segments",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_strings",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "list_unknowns",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "load_frida_script",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "match_native_functions",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "next_address",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "observe_javascript_runtime",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "observe_native_calls",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "observe_native_ui",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "observe_web_execution",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "observe_web_session",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "open_binary",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "open_bundle_resources",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "open_jeb_project",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "jeb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "pack_asar",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "prev_address",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_address",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_assembly",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_callees",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_callers",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_info",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_pseudo_code",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "procedure_references",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "project_android_application_graph",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "project_apple_application_graph",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "project_harmony_application_graph",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "project_managed_application_graph",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "pull_adb_file",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "pull_adb_package",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "push_adb_file",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "rea_execute_tool",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "rea_search_tools",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "read_adb_logcat",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "read_adb_setting",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "read_bytes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "read_function_instructions",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "reconcile_javascript_runtime",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "record_unknown",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "recover_javascript_sources",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "resolve_adb_packages",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "resolve_containing_procedure",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "resolve_native_call_targets",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "resume_frida_session",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "rizin_debug_command",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "rizin_debug_session_status",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "run_audit_pipeline",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "scan_secrets",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "search_android_classes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "search_bytes",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "search_procedures",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "search_strings",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "set_address_name",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "set_addresses_names",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "set_bookmark",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "set_comment",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "set_inline_comment",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "start_adb_activity",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "start_adb_app",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "start_frida_session",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "start_gdb_session",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "gdb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "start_rizin_debug_session",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "rizin",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "stop_adb_app",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_android_references",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_application_feature",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_call_path",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_dylib_resolution",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_feature",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_javascript_semantics",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_native_ui_action",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_native_values",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_web_module_imports",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "trace_web_source_location",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "uninstall_adb_package",
+      "route": "external-provider",
+      "support_tier": "provider-dependent",
+      "required_provider": "adb",
+      "platform": "provider-and-host-dependent",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "unload_frida_script",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "unset_bookmark",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "update_analysis_settings",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "update_unknown",
+      "route": "native",
+      "support_tier": "fixture-backed-candidate",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "black-box-MCP-assertions-only",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "verify_managed_native_boundaries",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "verify_reconstruction",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "verify_unknown_resolution",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    },
+    {
+      "name": "xrefs",
+      "route": "unavailable",
+      "support_tier": "unavailable",
+      "required_provider": null,
+      "platform": "cross-platform-not-yet-certified",
+      "evidence_contract": "unverified",
+      "upstream_parity": "not_verified"
+    }
+  ]
+}

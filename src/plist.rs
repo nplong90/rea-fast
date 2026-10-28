@@ -1,6 +1,6 @@
-use serde_json::{json, Value};
+use crate::security_io::{self, MAX_SOURCE_FILE_BYTES};
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 /// Parse bplist00 or XML/text plist into serde_json::Value
@@ -13,7 +13,8 @@ pub fn parse_plist_bytes(bytes: &[u8]) -> Result<Value, String> {
 }
 
 pub fn parse_plist_file<P: AsRef<Path>>(path: P) -> Result<Value, String> {
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
+    let bytes = security_io::read_limited(path.as_ref(), MAX_SOURCE_FILE_BYTES)
+        .map_err(|e| e.to_string())?;
     parse_plist_bytes(&bytes)
 }
 
@@ -42,11 +43,21 @@ fn parse_text_or_xml_plist(bytes: &[u8]) -> Result<Value, String> {
                         map.insert(key.to_string(), json!(false));
                         cursor = abs_val_tag + tag_end + 1;
                         continue;
-                    } else if let Some(close_tag) = text[abs_val_tag..].find(&format!("</{tag_name}>")) {
+                    } else if let Some(close_tag) =
+                        text[abs_val_tag..].find(&format!("</{tag_name}>"))
+                    {
                         let content = &text[abs_val_tag + tag_end + 1..abs_val_tag + close_tag];
                         let json_val = match tag_name {
-                            "integer" => content.trim().parse::<i64>().map(Value::from).unwrap_or(json!(content)),
-                            "real" => content.trim().parse::<f64>().map(Value::from).unwrap_or(json!(content)),
+                            "integer" => content
+                                .trim()
+                                .parse::<i64>()
+                                .map(Value::from)
+                                .unwrap_or(json!(content)),
+                            "real" => content
+                                .trim()
+                                .parse::<f64>()
+                                .map(Value::from)
+                                .unwrap_or(json!(content)),
                             _ => json!(content),
                         };
                         map.insert(key.to_string(), json_val);
@@ -69,7 +80,7 @@ fn parse_text_or_xml_plist(bytes: &[u8]) -> Result<Value, String> {
 }
 
 fn parse_bplist(bytes: &[u8]) -> Result<Value, String> {
-    if bytes.len() < 32 + 8 {
+    if bytes.len() < 32 + 8 + 1 {
         return Err("Binary plist too short".to_string());
     }
 
@@ -77,29 +88,79 @@ fn parse_bplist(bytes: &[u8]) -> Result<Value, String> {
     let trailer = &bytes[trailer_pos..];
     let offset_int_size = trailer[6] as usize;
     let object_ref_size = trailer[7] as usize;
-    let num_objects = u64::from_be_bytes(trailer[8..16].try_into().unwrap()) as usize;
-    let top_object = u64::from_be_bytes(trailer[16..24].try_into().unwrap()) as usize;
-    let offset_table_offset = u64::from_be_bytes(trailer[24..32].try_into().unwrap()) as usize;
+    let num_objects = usize::try_from(u64::from_be_bytes(trailer[8..16].try_into().unwrap()))
+        .map_err(|_| "Object count does not fit host address space")?;
+    let top_object = usize::try_from(u64::from_be_bytes(trailer[16..24].try_into().unwrap()))
+        .map_err(|_| "Top object index does not fit host address space")?;
+    let offset_table_offset =
+        usize::try_from(u64::from_be_bytes(trailer[24..32].try_into().unwrap()))
+            .map_err(|_| "Offset table location does not fit host address space")?;
 
-    if offset_int_size == 0 || object_ref_size == 0 || num_objects == 0 {
+    if !(1..=8).contains(&offset_int_size)
+        || !(1..=8).contains(&object_ref_size)
+        || num_objects == 0
+        || top_object >= num_objects
+        || offset_table_offset < 8
+        || offset_table_offset > trailer_pos
+    {
         return Err("Invalid trailer parameters".to_string());
+    }
+    let table_size = num_objects
+        .checked_mul(offset_int_size)
+        .ok_or("Offset table size overflow")?;
+    if table_size > trailer_pos - offset_table_offset {
+        return Err("Offset table exceeds file bounds".to_string());
     }
 
     let mut offsets = Vec::with_capacity(num_objects);
     for i in 0..num_objects {
         let entry_pos = offset_table_offset + i * offset_int_size;
-        if entry_pos + offset_int_size > trailer_pos {
-            return Err("Offset table exceeds file bounds".to_string());
-        }
-        let mut off_val: usize = 0;
-        for b in &bytes[entry_pos..entry_pos + offset_int_size] {
-            off_val = (off_val << 8) | (*b as usize);
+        let off_val = read_be_usize(read_bplist_range(
+            bytes,
+            entry_pos,
+            offset_int_size,
+            trailer_pos,
+        )?)?;
+        if off_val < 8 || off_val >= offset_table_offset {
+            return Err("Object offset points outside object data".to_string());
         }
         offsets.push(off_val);
     }
 
     let mut visited = HashMap::new();
-    read_bplist_object(bytes, top_object, &offsets, object_ref_size, &mut visited)
+    read_bplist_object(
+        bytes,
+        top_object,
+        &offsets,
+        object_ref_size,
+        offset_table_offset,
+        0,
+        &mut visited,
+    )
+}
+
+fn read_bplist_range(bytes: &[u8], start: usize, size: usize, end: usize) -> Result<&[u8], String> {
+    let stop = start
+        .checked_add(size)
+        .ok_or("Binary plist range overflow")?;
+    if start < 8 || stop > end {
+        return Err("Binary plist object exceeds data bounds".to_string());
+    }
+    bytes
+        .get(start..stop)
+        .ok_or_else(|| "Binary plist range is out of file bounds".to_string())
+}
+
+fn read_be_usize(bytes: &[u8]) -> Result<usize, String> {
+    if bytes.is_empty() || bytes.len() > 8 {
+        return Err("Unsupported binary plist integer size".to_string());
+    }
+    bytes.iter().try_fold(0usize, |value, byte| {
+        value
+            .checked_mul(256)
+            .and_then(|v| v.checked_add(*byte as usize))
+            .ok_or_else(|| "Binary plist integer overflows host size".to_string())
+    })
 }
 
 fn read_bplist_object(
@@ -107,8 +168,15 @@ fn read_bplist_object(
     obj_idx: usize,
     offsets: &[usize],
     obj_ref_size: usize,
+    objects_end: usize,
+    depth: usize,
     visited: &mut HashMap<usize, Value>,
 ) -> Result<Value, String> {
+    if depth >= 64 {
+        return Err(
+            "Binary plist object graph exceeds nesting limit or contains a cycle".to_string(),
+        );
+    }
     if let Some(cached) = visited.get(&obj_idx) {
         return Ok(cached.clone());
     }
@@ -117,7 +185,7 @@ fn read_bplist_object(
     }
 
     let pos = offsets[obj_idx];
-    if pos >= bytes.len() {
+    if pos >= objects_end {
         return Err("Object offset out of range".to_string());
     }
 
@@ -126,17 +194,25 @@ fn read_bplist_object(
     let mut count = (marker & 0x0F) as usize;
     let mut header_len = 1;
 
-    if (obj_type == 0x4 || obj_type == 0x5 || obj_type == 0x6 || obj_type == 0xA || obj_type == 0xC || obj_type == 0xD)
+    if (obj_type == 0x4
+        || obj_type == 0x5
+        || obj_type == 0x6
+        || obj_type == 0xA
+        || obj_type == 0xC
+        || obj_type == 0xD)
         && count == 0x0F
     {
         // Extended count stored in follow-up integer object
-        let int_marker = bytes[pos + 1];
-        let int_len = 1 << (int_marker & 0x0F);
-        header_len = 2 + int_len;
-        count = 0;
-        for b in &bytes[pos + 2..pos + 2 + int_len] {
-            count = (count << 8) | (*b as usize);
+        let int_marker = read_bplist_range(bytes, pos + 1, 1, objects_end)?[0];
+        if int_marker >> 4 != 0x1 {
+            return Err("Extended count must use an integer marker".to_string());
         }
+        let int_len = 1usize
+            .checked_shl((int_marker & 0x0F) as u32)
+            .filter(|len| *len <= 8)
+            .ok_or("Unsupported extended count size")?;
+        header_len = 2 + int_len;
+        count = read_be_usize(read_bplist_range(bytes, pos + 2, int_len, objects_end)?)?;
     }
 
     let val = match obj_type {
@@ -148,105 +224,134 @@ fn read_bplist_object(
         },
         0x1 => {
             // Integer
-            let len = 1 << (marker & 0x0F);
-            let mut int_val: i64 = 0;
-            for b in &bytes[pos + 1..pos + 1 + len] {
-                int_val = (int_val << 8) | (*b as i64);
-            }
-            json!(int_val)
+            let len = 1usize
+                .checked_shl((marker & 0x0F) as u32)
+                .filter(|len| *len <= 8)
+                .ok_or("Unsupported plist integer width")?;
+            json!(read_be_usize(read_bplist_range(bytes, pos + 1, len, objects_end)?)? as i64)
         }
         0x2 => {
             // Real (Float)
-            let len = 1 << (marker & 0x0F);
+            let len = 1usize
+                .checked_shl((marker & 0x0F) as u32)
+                .ok_or("Invalid plist float width")?;
             if len == 4 {
-                let f_bytes: [u8; 4] = bytes[pos + 1..pos + 5].try_into().unwrap();
+                let f_bytes: [u8; 4] = read_bplist_range(bytes, pos + 1, 4, objects_end)?
+                    .try_into()
+                    .unwrap();
                 json!(f32::from_be_bytes(f_bytes))
             } else if len == 8 {
-                let f_bytes: [u8; 8] = bytes[pos + 1..pos + 9].try_into().unwrap();
+                let f_bytes: [u8; 8] = read_bplist_range(bytes, pos + 1, 8, objects_end)?
+                    .try_into()
+                    .unwrap();
                 json!(f64::from_be_bytes(f_bytes))
             } else {
-                json!(0.0)
+                return Err("Unsupported plist float width".to_string());
             }
         }
         0x3 => {
             // Date (CFDate - seconds since Jan 1 2001)
-            let f_bytes: [u8; 8] = bytes[pos + 1..pos + 9].try_into().unwrap();
+            let f_bytes: [u8; 8] = read_bplist_range(bytes, pos + 1, 8, objects_end)?
+                .try_into()
+                .unwrap();
             let secs = f64::from_be_bytes(f_bytes);
             json!({ "cf_date_epoch_2001": secs })
         }
         0x4 => {
             // Data
-            let slice = &bytes[pos + header_len..pos + header_len + count];
+            let slice = read_bplist_range(bytes, pos + header_len, count, objects_end)?;
             json!({ "hex": hex_encode(slice), "length": count })
         }
         0x5 => {
             // ASCII String
-            let slice = &bytes[pos + header_len..pos + header_len + count];
+            let slice = read_bplist_range(bytes, pos + header_len, count, objects_end)?;
             json!(String::from_utf8_lossy(slice))
         }
         0x6 => {
             // UTF-16 String
-            let slice = &bytes[pos + header_len..pos + header_len + count * 2];
-            let u16s: Vec<u16> = slice.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+            let size = count
+                .checked_mul(2)
+                .ok_or("UTF-16 string length overflow")?;
+            let slice = read_bplist_range(bytes, pos + header_len, size, objects_end)?;
+            let u16s: Vec<u16> = slice
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
             json!(String::from_utf16_lossy(&u16s))
         }
         0x8 => {
             // UID (NSKeyedArchiver)
             let len = (marker & 0x0F) as usize + 1;
-            let mut uid: u64 = 0;
-            for b in &bytes[pos + 1..pos + 1 + len] {
-                uid = (uid << 8) | (*b as u64);
-            }
+            let uid = read_be_usize(read_bplist_range(bytes, pos + 1, len, objects_end)?)?;
             json!({ "CF$UID": uid })
         }
         0xA | 0xC => {
             // Array or Set
+            let size = count
+                .checked_mul(obj_ref_size)
+                .ok_or("Array reference table overflow")?;
+            let refs = read_bplist_range(bytes, pos + header_len, size, objects_end)?;
             let mut arr = Vec::with_capacity(count);
-            let refs_pos = pos + header_len;
-            for i in 0..count {
-                let mut ref_idx = 0;
-                let start = refs_pos + i * obj_ref_size;
-                for b in &bytes[start..start + obj_ref_size] {
-                    ref_idx = (ref_idx << 8) | (*b as usize);
-                }
-                arr.push(read_bplist_object(bytes, ref_idx, offsets, obj_ref_size, visited)?);
+            for reference in refs.chunks_exact(obj_ref_size) {
+                let ref_idx = read_be_usize(reference)?;
+                arr.push(read_bplist_object(
+                    bytes,
+                    ref_idx,
+                    offsets,
+                    obj_ref_size,
+                    objects_end,
+                    depth + 1,
+                    visited,
+                )?);
             }
             Value::Array(arr)
         }
         0xD => {
             // Dictionary
+            let key_bytes = count
+                .checked_mul(obj_ref_size)
+                .ok_or("Dictionary reference table overflow")?;
+            let total_bytes = key_bytes
+                .checked_mul(2)
+                .ok_or("Dictionary reference table overflow")?;
+            let references = read_bplist_range(bytes, pos + header_len, total_bytes, objects_end)?;
+            let (keys, values) = references.split_at(key_bytes);
             let mut map = serde_json::Map::new();
-            let keys_pos = pos + header_len;
-            let vals_pos = keys_pos + count * obj_ref_size;
-
-            let mut key_indices = Vec::with_capacity(count);
-            for i in 0..count {
-                let mut ref_idx = 0;
-                let start = keys_pos + i * obj_ref_size;
-                for b in &bytes[start..start + obj_ref_size] {
-                    ref_idx = (ref_idx << 8) | (*b as usize);
-                }
-                key_indices.push(ref_idx);
-            }
-
-            for (i, k_idx) in key_indices.into_iter().enumerate() {
-                let key_val = read_bplist_object(bytes, k_idx, offsets, obj_ref_size, visited)?;
+            for (key_ref, value_ref) in keys
+                .chunks_exact(obj_ref_size)
+                .zip(values.chunks_exact(obj_ref_size))
+            {
+                let k_idx = read_be_usize(key_ref)?;
+                let key_val = read_bplist_object(
+                    bytes,
+                    k_idx,
+                    offsets,
+                    obj_ref_size,
+                    objects_end,
+                    depth + 1,
+                    visited,
+                )?;
                 let key_str = match key_val {
                     Value::String(s) => s,
                     other => other.to_string(),
                 };
-
-                let mut v_idx = 0;
-                let start = vals_pos + i * obj_ref_size;
-                for b in &bytes[start..start + obj_ref_size] {
-                    v_idx = (v_idx << 8) | (*b as usize);
-                }
-                let val_obj = read_bplist_object(bytes, v_idx, offsets, obj_ref_size, visited)?;
+                let v_idx = read_be_usize(value_ref)?;
+                let val_obj = read_bplist_object(
+                    bytes,
+                    v_idx,
+                    offsets,
+                    obj_ref_size,
+                    objects_end,
+                    depth + 1,
+                    visited,
+                )?;
                 map.insert(key_str, val_obj);
             }
             Value::Object(map)
         }
-        _ => Value::Null,
+        _ => return Err(format!("Unsupported binary plist object type: {obj_type}")),
     };
 
     visited.insert(obj_idx, val.clone());
@@ -293,7 +398,8 @@ pub fn project_apple_application_graph(args: &Value) -> Value {
 
     if let Some(items) = inventory {
         for it in items {
-            let path = it.get("path")
+            let path = it
+                .get("path")
                 .or_else(|| it.get("subject").and_then(|s| s.get("local_path")))
                 .and_then(|p| p.as_str())
                 .unwrap_or("");
@@ -345,7 +451,8 @@ pub fn project_harmony_application_graph(args: &Value) -> Value {
 
     if let Some(items) = inventory {
         for it in items {
-            let path = it.get("path")
+            let path = it
+                .get("path")
                 .or_else(|| it.get("subject").and_then(|s| s.get("local_path")))
                 .and_then(|p| p.as_str())
                 .unwrap_or("");
@@ -385,9 +492,24 @@ pub fn inspect_keyed_archive(args: &Value) -> Value {
         Err(e) => return json!({ "status": "error", "message": e }),
     };
 
+    // The lightweight XML plist scanner supports scalar keys, not nested
+    // dictionaries/arrays.  It must not silently present a keyed archive's
+    // inaccessible objects as an empty, fully decoded archive.
+    if !plist_val.get("$objects").is_some_and(Value::is_array)
+        || !plist_val.get("$top").is_some_and(Value::is_object)
+    {
+        return json!({
+            "status": "unavailable",
+            "reason": "Nested XML keyed archives are not supported by this lightweight plist decoder; no objects were verified",
+        });
+    }
+
     let objects = plist_val.get("$objects").and_then(|o| o.as_array());
     let top = plist_val.get("$top");
-    let archiver = plist_val.get("$archiver").and_then(|a| a.as_str()).unwrap_or("NSKeyedArchiver");
+    let archiver = plist_val
+        .get("$archiver")
+        .and_then(|a| a.as_str())
+        .unwrap_or("NSKeyedArchiver");
 
     json!({
         "status": "complete",
@@ -401,17 +523,70 @@ pub fn inspect_keyed_archive(args: &Value) -> Value {
 /// Decode Interface Builder archives (.nib / .storyboard)
 pub fn decode_interface_builder(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "documents_count": 1,
-        "objects_count": 0,
-        "connections_count": 0,
-        "views": []
+        "status": "unavailable",
+        "reason": "Interface Builder archive decoding is not implemented"
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nested_xml_keyed_archive_must_not_claim_complete_decoding() {
+        let p = std::env::temp_dir().join(format!("rea-keyed-{}.plist", std::process::id()));
+        std::fs::write(&p, b"<plist><dict><key>$objects</key><array><string>entry</string></array><key>$top</key><dict></dict></dict></plist>").unwrap();
+        let result = inspect_keyed_archive(&json!({"path": p.to_string_lossy()}));
+        let _ = std::fs::remove_file(p);
+        assert_eq!(result["status"], "unavailable");
+    }
+
+    #[test]
+    fn interface_builder_stub_must_not_claim_decoded_documents() {
+        let result = decode_interface_builder(&json!({"path": "test.nib"}));
+        assert_eq!(result["status"], "unavailable");
+        assert!(result.get("documents_count").is_none());
+    }
+
+    fn bplist_with_object(object: &[u8]) -> Vec<u8> {
+        let mut data = b"bplist00".to_vec();
+        data.extend_from_slice(object);
+        data.push(8); // Object zero is located after the 8-byte header.
+        data.extend_from_slice(&[0; 6]);
+        data.push(1); // Offset integer size.
+        data.push(1); // Object reference size.
+        data.extend_from_slice(&1u64.to_be_bytes());
+        data.extend_from_slice(&0u64.to_be_bytes());
+        data.extend_from_slice(&(8u64 + object.len() as u64).to_be_bytes());
+        data
+    }
+
+    #[test]
+    fn rejects_truncated_objects_and_self_referential_graphs() {
+        assert!(parse_plist_bytes(&bplist_with_object(&[0x55, b'A'])).is_err());
+        assert!(parse_plist_bytes(&bplist_with_object(&[0xA1, 0])).is_err());
+        assert!(parse_plist_bytes(&bplist_with_object(&[0x4F, 0x10])).is_err());
+        let mut out_of_bounds = bplist_with_object(&[0x09]);
+        out_of_bounds[9] = 41; // Offset points into the trailer.
+        assert!(parse_plist_bytes(&out_of_bounds).is_err());
+    }
+
+    #[test]
+    fn malformed_binary_plists_never_panic() {
+        // Deterministic mutation corpus: each trailer/header byte and every
+        // object marker is mutated without trusting a valid-looking trailer.
+        let baseline = bplist_with_object(&[0x09]);
+        for i in 0..baseline.len() {
+            for replacement in [0, 0x0F, 0x7F, 0xFF] {
+                let mut mutated = baseline.clone();
+                mutated[i] = replacement;
+                let _ = parse_plist_bytes(&mutated);
+            }
+        }
+        for marker in 0..=255u8 {
+            let _ = parse_plist_bytes(&bplist_with_object(&[marker]));
+        }
+    }
 
     #[test]
     fn test_bplist_basic() {

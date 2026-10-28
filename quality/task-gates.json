@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "goal": "M1 — safe, explicitly partial REA-Fast merge",
+  "policy": "A task is DONE only after every required platform and every check has verified evidence on the same commit. A green CI job alone does not complete the goal.",
+  "tasks": [
+    {
+      "id": "G0-routing-contract",
+      "title": "Freeze honest catalog route contracts",
+      "depends_on": [],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "contract-drift", "argv": ["node", "tests/acceptance/contracts.mjs", "--check"], "expect_stdout": "Verified 245 versioned contracts" }]
+    },
+    {
+      "id": "S1-extraction-race",
+      "title": "Prove extraction cannot escape a private root during concurrent renames",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "concurrent-directory-swap", "argv": ["cargo", "test", "--locked", "security_io::tests::concurrent_directory_swap_cannot_escape_extraction_capability", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "visible-root-swap", "argv": ["cargo", "test", "--locked", "security_io::tests::replacing_visible_root_after_open_cannot_redirect_writes", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "exclusive-output", "argv": ["cargo", "test", "--locked", "security_io::tests::exclusive_outputs_never_clobber", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-extraction", "argv": ["cargo", "test", "--locked", "asar::tests::extracts_all_with_integrity_and_contradictions", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "bundle-extraction", "argv": ["cargo", "test", "--locked", "bundle::tests::unbundles_webpack_jsonp_push", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "sourcemap-extraction", "argv": ["cargo", "test", "--locked", "sourcemap::tests::extracts_sourcemap_v3_json", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-extraction", "argv": ["cargo", "test", "--locked", "tauri::tests::extracted_assets_use_exclusive_output_capability", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
+      "id": "S2a-bounded-text-readers",
+      "title": "Bound source-text readers and fail closed on partial source or secret scans",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "mcp-text-paths", "argv": ["cargo", "test", "--locked", "mcp::tests::oversized_mcp_text_paths_fail_closed_without_partial_results", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "external-sourcemap", "argv": ["cargo", "test", "--locked", "sourcemap::tests::oversized_external_sourcemap_is_rejected_before_extraction", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
+      "id": "S2b-http-response-bounds",
+      "title": "Reject oversized provider HTTP responses, even if the prefix is valid JSON",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "http-response-one-extra-byte", "argv": ["cargo", "test", "--locked", "tcp_driver::tests::oversized_http_response_cannot_pass_as_valid_json_prefix", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
+      "id": "S2c-proc-snapshot",
+      "title": "Bound Linux procfs snapshots despite st_size=0",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux"],
+      "checks": [
+        { "name": "procfs-growing-and-zero-length", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::oversized_proc_snapshot_fails_closed_and_real_procfs_zero_size_reads_work", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
+      "id": "S2-bounded-io",
+      "title": "Finish repository-wide direct I/O allocation and decompression audit",
+      "depends_on": ["S2a-bounded-text-readers", "S2b-http-response-bounds", "S2c-proc-snapshot"],
+      "platforms": ["linux", "win32"],
+      "checks": [
+        { "name": "direct-io-drift-inventory", "argv": ["node", "quality/io-audit.mjs"], "expect_stdout": "Verified direct I/O inventory" },
+        { "name": "project-file-and-byte-budget", "argv": ["cargo", "test", "--locked", "security_io::tests::project_budget_rejects_many_small_files_and_large_total", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "project-sparse-input", "argv": ["cargo", "test", "--locked", "security_io::tests::project_budget_rejects_sparse_file_without_allocating_contents", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-extraction-total", "argv": ["cargo", "test", "--locked", "asar::tests::cumulative_asar_extraction_limit_is_enforced_before_output_creation", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-unpacked-real-bytes", "argv": ["cargo", "test", "--locked", "asar::tests::unpacked_asset_must_obey_actual_cumulative_output_limit", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-unpacked-header-mismatch", "argv": ["cargo", "test", "--locked", "asar::tests::unpacked_asset_header_length_mismatch_fails_closed", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "asar-pack-sparse-oversize", "argv": ["cargo", "test", "--locked", "asar::tests::asar_packer_rejects_sparse_oversized_input_before_writing_archive", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "fuses-excess-fail-closed", "argv": ["cargo", "test", "--locked", "fuses::tests::too_many_fuse_sentinels_fail_closed_instead_of_reporting_partial_slice_list", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-brotli-probe-budget", "argv": ["cargo", "test", "--locked", "tauri::tests::brotli_heuristic_budget_refuses_to_claim_complete_extraction", "--", "--exact"], "expect_stdout": "1 passed" },
+        { "name": "tauri-total-output-budget", "argv": ["cargo", "test", "--locked", "tauri::tests::cumulative_tauri_output_budget_prevents_disk_expansion", "--", "--exact"], "expect_stdout": "1 passed" }
+      ]
+    },
+    {
+      "id": "S3-unix-process-tree",
+      "title": "Timeout kills descendants on Unix",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux"],
+      "checks": [{ "name": "unix-descendants", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::test_optional_bridge_timeout_cleans_up_descendants", "--", "--exact"], "expect_stdout": "1 passed" }]
+    },
+    {
+      "id": "S3-windows-process-tree",
+      "title": "Timeout kills actual descendants on Windows",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["win32"],
+      "checks": [{ "name": "windows-descendants", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::test_optional_bridge_timeout_cleans_up_descendants_windows", "--", "--exact"], "expect_stdout": "1 passed" }]
+    },
+    {
+      "id": "C1-mcp-native-routing",
+      "title": "Exercise all 63 native-labeled routes with real MCP calls",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "mcp-63", "argv": ["node", "tests/acceptance/mcp-matrix.mjs", "--rust-bin", "${REA_FAST_BIN}"], "expect_stdout": "\"fixture_exercised\":63" }]
+    },
+    {
+      "id": "C2-provider-offline",
+      "title": "Provider-free routes fail closed without inventing positive evidence",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "provider-51", "argv": ["node", "tests/acceptance/provider-offline.mjs", "--rust-bin", "${REA_FAST_BIN}"], "expect_stdout": "\"checked\":51" }]
+    },
+    {
+      "id": "C2-provider-live",
+      "title": "Test supported external providers with success, malformed and timeout scenarios",
+      "depends_on": ["C2-provider-offline"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Need reproducible ADB/Rizin/Frida/JEB fixtures, or explicit demotion to unavailable before this gate can pass"
+    },
+    {
+      "id": "E1-upstream-semantics",
+      "title": "Prove pinned upstream parity only for explicitly advertised observable subsets",
+      "depends_on": ["C1-mcp-native-routing"],
+      "platforms": ["linux"],
+      "checks": [
+        { "name": "upstream-js-facts", "argv": ["node", "tests/parity/compare-js.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-asar-container", "argv": ["node", "tests/parity/compare-asar.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-electron-static-ipc", "argv": ["node", "tests/parity/compare-electron.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" },
+        { "name": "upstream-native-mobile-root-facts", "argv": ["node", "tests/parity/compare-native-mobile.mjs", "--rust-bin", "${REA_FAST_BIN}", "--upstream", "${REA_UPSTREAM_DIR}"], "expect_stdout": "\"status\": \"fixture_match\"" }
+      ]
+    },
+    {
+      "id": "F1-adversarial-corpus",
+      "title": "Run deterministic hostile corpus across parsers and transports",
+      "depends_on": ["S1-extraction-race", "S2-bounded-io", "S3-unix-process-tree", "S3-windows-process-tree"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Fuzz corpus, timeout, crash and memory ceilings are not yet fully encoded"
+    },
+    {
+      "id": "B1-five-workload-parity-benchmark",
+      "title": "Benchmark five fact-equivalent workloads with CPU, RSS and wall time",
+      "depends_on": ["E1-upstream-semantics"],
+      "platforms": ["linux"],
+      "checks": [],
+      "blocker": "Only the pinned JS subset comparison exists; four more comparable workloads plus process-family metrics are missing"
+    },
+    {
+      "id": "R1-independent-merge-review",
+      "title": "Independent final-head review, CI and user-controlled merge decision",
+      "depends_on": ["S1-extraction-race", "S2-bounded-io", "S3-unix-process-tree", "S3-windows-process-tree", "C1-mcp-native-routing", "C2-provider-live", "E1-upstream-semantics", "F1-adversarial-corpus", "B1-five-workload-parity-benchmark"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Independent review and explicit final authorization required; no automatic merge"
+    }
+  ]
+}

@@ -1,6 +1,5 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::fs;
 
 #[derive(Debug, Default)]
 pub struct ClrMetadata {
@@ -64,7 +63,9 @@ fn parse_bsjb_root(bytes: &[u8], pos: usize, meta: &mut ClrMetadata) {
     }
 
     let v_str_raw = &bytes[pos + 16..pos + 16 + v_len];
-    let v_str = String::from_utf8_lossy(v_str_raw).trim_matches('\0').to_string();
+    let v_str = String::from_utf8_lossy(v_str_raw)
+        .trim_matches('\0')
+        .to_string();
     meta.version = v_str;
 
     // After version string:
@@ -74,15 +75,18 @@ fn parse_bsjb_root(bytes: &[u8], pos: usize, meta: &mut ClrMetadata) {
     if after_v + 4 > bytes.len() {
         return;
     }
-    let streams_count = u16::from_le_bytes(bytes[after_v + 2..after_v + 4].try_into().unwrap_or([0; 2])) as usize;
+    let streams_count =
+        u16::from_le_bytes(bytes[after_v + 2..after_v + 4].try_into().unwrap_or([0; 2])) as usize;
 
     let mut cursor = after_v + 4;
     for _ in 0..streams_count {
         if cursor + 8 > bytes.len() {
             break;
         }
-        let stream_offset = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap_or([0; 4]));
-        let stream_size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap_or([0; 4]));
+        let stream_offset =
+            u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap_or([0; 4]));
+        let stream_size =
+            u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().unwrap_or([0; 4]));
         cursor += 8;
 
         // Name is null-terminated ASCII padded to 4-byte boundary
@@ -119,10 +123,8 @@ fn parse_bsjb_root(bytes: &[u8], pos: usize, meta: &mut ClrMetadata) {
                 "#US" => {
                     extract_user_strings(stream_data, meta);
                 }
-                "#GUID" => {
-                    if stream_data.len() >= 16 {
-                        meta.mvid = Some(format_guid(&stream_data[0..16]));
-                    }
+                "#GUID" if stream_data.len() >= 16 => {
+                    meta.mvid = Some(format_guid(&stream_data[0..16]));
                 }
                 _ => {}
             }
@@ -135,7 +137,7 @@ fn extract_ascii_strings(data: &[u8], meta: &mut ClrMetadata) {
     while cur < data.len() {
         if let Some(zero) = data[cur..].iter().position(|&b| b == 0) {
             let slice = &data[cur..cur + zero];
-            if !slice.is_empty() && slice.iter().all(|&b| b >= 0x20 && b <= 0x7E) {
+            if !slice.is_empty() && slice.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
                 let s = String::from_utf8_lossy(slice).to_string();
                 if s.contains('.') || s.starts_with("I") && s.len() > 3 {
                     meta.type_names.push(s.clone());
@@ -162,10 +164,14 @@ fn extract_user_strings(data: &[u8], meta: &mut ClrMetadata) {
         let (len, len_bytes) = if (b0 & 0x80) == 0 {
             (b0 as usize, 1)
         } else if (b0 & 0xC0) == 0x80 {
-            if cur + 2 > data.len() { break; }
+            if cur + 2 > data.len() {
+                break;
+            }
             (((b0 as usize & 0x3F) << 8) | (data[cur + 1] as usize), 2)
         } else if (b0 & 0xE0) == 0xC0 {
-            if cur + 4 > data.len() { break; }
+            if cur + 4 > data.len() {
+                break;
+            }
             (
                 ((b0 as usize & 0x1F) << 24)
                     | ((data[cur + 1] as usize) << 16)
@@ -188,7 +194,9 @@ fn extract_user_strings(data: &[u8], meta: &mut ClrMetadata) {
         // String is (len - 1) bytes of UTF-16LE, last byte is terminal flag
         let str_bytes = &data[cur..cur + len.saturating_sub(1)];
         let u16s: Vec<u16> = str_bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         let s = String::from_utf16_lossy(&u16s);
@@ -212,7 +220,7 @@ fn extract_il2cpp_metadata(data: &[u8], meta: &mut ClrMetadata) {
     while cur < data.len() && meta.strings.len() < 500 {
         if let Some(zero) = data[cur..].iter().position(|&b| b == 0) {
             let slice = &data[cur..cur + zero];
-            if slice.len() >= 3 && slice.iter().all(|&b| b >= 0x20 && b <= 0x7E) {
+            if slice.len() >= 3 && slice.iter().all(|&b| (0x20..=0x7E).contains(&b)) {
                 let s = String::from_utf8_lossy(slice).to_string();
                 if s.contains('.') {
                     meta.type_names.push(s.clone());
@@ -229,7 +237,22 @@ fn extract_il2cpp_metadata(data: &[u8], meta: &mut ClrMetadata) {
 fn format_guid(b: &[u8]) -> String {
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        b[3], b[2], b[1], b[0], b[5], b[4], b[7], b[6], b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+        b[3],
+        b[2],
+        b[1],
+        b[0],
+        b[5],
+        b[4],
+        b[7],
+        b[6],
+        b[8],
+        b[9],
+        b[10],
+        b[11],
+        b[12],
+        b[13],
+        b[14],
+        b[15]
     )
 }
 
@@ -239,20 +262,29 @@ fn format_guid(b: &[u8]) -> String {
 
 pub fn inspect_managed_artifact(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") }),
+        Err(e) => {
+            return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
+        }
     };
 
     let meta = parse_managed_bytes(&bytes);
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
-    let streams_info: Vec<Value> = meta.streams.iter().map(|s| {
-        json!({
-            "name": s.name,
-            "offset": s.offset,
-            "size": s.size
+    let streams_info: Vec<Value> = meta
+        .streams
+        .iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "offset": s.offset,
+                "size": s.size
+            })
         })
-    }).collect();
+        .collect();
 
     json!({
         "status": "complete",
@@ -275,9 +307,14 @@ pub fn inspect_managed_members(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
     let type_filter = args.get("type_names").and_then(|v| v.as_array());
 
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") }),
+        Err(e) => {
+            return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
+        }
     };
 
     let meta = parse_managed_bytes(&bytes);
@@ -288,7 +325,10 @@ pub fn inspect_managed_members(args: &Value) -> Value {
     let matched_types: Vec<&String> = if filter_set.is_empty() {
         meta.type_names.iter().take(50).collect()
     } else {
-        meta.type_names.iter().filter(|t| filter_set.iter().any(|f| t.contains(f))).collect()
+        meta.type_names
+            .iter()
+            .filter(|t| filter_set.iter().any(|f| t.contains(f)))
+            .collect()
     };
 
     json!({
@@ -303,19 +343,28 @@ pub fn inspect_managed_members(args: &Value) -> Value {
 
 pub fn inspect_managed_native_boundaries(args: &Value) -> Value {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
-    let bytes = match fs::read(path_str) {
+    let bytes = match crate::security_io::read_limited(
+        std::path::Path::new(path_str),
+        crate::security_io::MAX_ANALYSIS_FILE_BYTES,
+    ) {
         Ok(b) => b,
-        Err(e) => return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") }),
+        Err(e) => {
+            return json!({ "status": "error", "message": format!("Failed to read {path_str}: {e}") });
+        }
     };
 
     let meta = parse_managed_bytes(&bytes);
-    let pinvokes: Vec<Value> = meta.pinvoke_imports.iter().map(|lib| {
-        json!({
-            "module_ref": lib,
-            "boundary_type": "PInvoke/DllImport",
-            "verified": false
+    let pinvokes: Vec<Value> = meta
+        .pinvoke_imports
+        .iter()
+        .map(|lib| {
+            json!({
+                "module_ref": lib,
+                "boundary_type": "PInvoke/DllImport",
+                "verified": false
+            })
         })
-    }).collect();
+        .collect();
 
     json!({
         "status": "complete",
@@ -327,40 +376,60 @@ pub fn inspect_managed_native_boundaries(args: &Value) -> Value {
 
 pub fn verify_managed_native_boundaries(_args: &Value) -> Value {
     json!({
-        "status": "pass",
-        "verified": true,
-        "unresolved_declarations": []
+        "status": "unavailable",
+        "verified": null,
+        "unresolved_declarations": null,
+        "reason": "No retained boundary declarations or native targets were verified"
     })
 }
 
 pub fn compare_managed_members(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "members_matched": true,
-        "structural_differences": []
+        "status": "unavailable",
+        "members_matched": null,
+        "structural_differences": null,
+        "reason": "No member identities or method bodies were compared"
     })
 }
 
 pub fn project_managed_application_graph(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "graph_nodes": [],
-        "call_edges": [],
-        "managed_type_boundaries": []
+        "status": "unavailable",
+        "graph_nodes": null,
+        "call_edges": null,
+        "managed_type_boundaries": null,
+        "reason": "No managed reference graph has been constructed"
     })
 }
 
 pub fn import_managed_reconstruction(_args: &Value) -> Value {
     json!({
-        "status": "complete",
-        "imported": true,
-        "methods_reconstructed": 0
+        "status": "unavailable",
+        "imported": false,
+        "methods_reconstructed": null,
+        "reason": "Managed reconstruction import is not implemented"
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unimplemented_managed_workflows_never_claim_verification() {
+        let args = json!({"claims": [], "left": {}, "right": {}});
+        assert_eq!(
+            verify_managed_native_boundaries(&args)["status"],
+            "unavailable"
+        );
+        assert!(verify_managed_native_boundaries(&args)["verified"].is_null());
+        assert!(compare_managed_members(&args)["members_matched"].is_null());
+        assert_eq!(
+            project_managed_application_graph(&args)["status"],
+            "unavailable"
+        );
+        assert_eq!(import_managed_reconstruction(&args)["imported"], false);
+    }
 
     #[test]
     fn test_bsjb_parsing() {
