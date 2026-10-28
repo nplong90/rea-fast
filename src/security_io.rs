@@ -215,6 +215,9 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+        // Windows does not permit removing a directory while an open Dir
+        // handle still references it.
+        drop(output);
         fs::remove_dir_all(&base).unwrap();
     }
 
@@ -303,18 +306,24 @@ mod tests {
                 link_directory(&outside, &base).expect("test requires directory-link support");
                 let mut output_file = output.create_new_file(Path::new("safe.txt")).unwrap();
                 output_file.write_all(b"inside").unwrap();
+                drop(output_file);
                 assert!(!outside.join("safe.txt").exists());
                 assert_eq!(fs::read(held.join("safe.txt")).unwrap(), b"inside");
                 unlink_directory_link(&base).unwrap();
                 fs::rename(&held, &base).unwrap();
             }
-            Err(error) if cfg!(windows) && error.kind() == io::ErrorKind::PermissionDenied => {
+            Err(error)
+                if cfg!(windows)
+                    && (error.kind() == io::ErrorKind::PermissionDenied
+                        || error.raw_os_error() == Some(32)) =>
+            {
                 output.create_new_file(Path::new("safe.txt")).unwrap();
                 assert!(!outside.join("safe.txt").exists());
             }
             Err(error) => panic!("cannot exercise root swap: {error}"),
         }
 
+        drop(output);
         fs::remove_dir_all(&base).unwrap();
         fs::remove_dir_all(&outside).unwrap();
     }
