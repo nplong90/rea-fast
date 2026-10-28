@@ -1,5 +1,29 @@
 # rea-fast PR #1 — merge-readiness execution plan
 
+## Atomic execution ledger — 2026-10-28, goal-driven gate update
+
+This update is **not an M1 signoff**. `quality/task-gates.json` and its
+runner replace ambiguous aggregate “2/5 passed” reporting with 12 individually
+tracked tasks, each with dependencies and required OS evidence on the **same
+commit**. Blockers stay open until implemented and proven; a Linux pass cannot
+silently complete a Windows gate. No daily schedule or auto-merge.
+
+- Gate runner: 7 Node unit cases (including mixed-commit, absent platform,
+  subprocess error, blocked dependency and explicit blocker), manifest drift
+  validation, and real local G0 route-contract pass for all 245 entries.
+- S3: strengthened Unix timeout regression to verify the spawned descendant
+  actually stops running, and added a new Windows PowerShell grandchild process
+  test. Local Linux targeted regression passes. Windows outcome **pending CI**.
+- Local checks on these changes: `cargo fmt --check`, 123/123 Rust tests with
+  loopback permission, strict Clippy and Node task gate unit tests pass.
+- CI: every Rust matrix OS runs atomic task checks and uploads a per-commit
+  receipt; a separate job aggregates Windows + Linux reports without treating
+  explicitly unimplemented tasks as done. Its **new-head outcome is pending**.
+
+Next independently actionable work after the gate is green: finish S1
+concurrent extraction race hardening, then S2 direct-read inventory, followed
+by the remaining C2/E1/F1/B1 verification and R1. The PR remains Draft.
+
 Snapshot: 2026-10-28, PR head `3a4fac3f63031478ba7147e2afe83af3480ce54c`.
 Reference: `morluto/rea` pinned at `6de60993b861266e63a4e70d5c6d9a8073f7cd92`.
 Tracking PR: https://github.com/nplong90/rea-fast/pull/1

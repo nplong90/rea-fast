@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "goal": "M1 — safe, explicitly partial REA-Fast merge",
+  "policy": "A task is DONE only after every required platform and every check has verified evidence on the same commit. A green CI job alone does not complete the goal.",
+  "tasks": [
+    {
+      "id": "G0-routing-contract",
+      "title": "Freeze honest catalog route contracts",
+      "depends_on": [],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "contract-drift", "argv": ["node", "tests/acceptance/contracts.mjs", "--check"], "expect_stdout": "Verified 245 versioned contracts" }]
+    },
+    {
+      "id": "S1-extraction-race",
+      "title": "Prove extraction cannot escape a private root during concurrent renames",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Concurrent attacker/defender rename test and dirfd/handle-relative hardening not implemented on both platforms"
+    },
+    {
+      "id": "S2-bounded-io",
+      "title": "Finish repository-wide direct I/O allocation and decompression audit",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Remaining direct readers and resource stress corpus need a complete reviewed inventory"
+    },
+    {
+      "id": "S3-unix-process-tree",
+      "title": "Timeout kills descendants on Unix",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux"],
+      "checks": [{ "name": "unix-descendants", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::test_optional_bridge_timeout_cleans_up_descendants", "--", "--exact"], "expect_stdout": "1 passed" }]
+    },
+    {
+      "id": "S3-windows-process-tree",
+      "title": "Timeout kills actual descendants on Windows",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["win32"],
+      "checks": [{ "name": "windows-descendants", "argv": ["cargo", "test", "--locked", "dynamic_bridge::tests::test_optional_bridge_timeout_cleans_up_descendants_windows", "--", "--exact"], "expect_stdout": "1 passed" }]
+    },
+    {
+      "id": "C1-mcp-native-routing",
+      "title": "Exercise all 63 native-labeled routes with real MCP calls",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "mcp-63", "argv": ["node", "tests/acceptance/mcp-matrix.mjs", "--rust-bin", "${REA_FAST_BIN}"], "expect_stdout": "\"fixture_exercised\":63" }]
+    },
+    {
+      "id": "C2-provider-offline",
+      "title": "Provider-free routes fail closed without inventing positive evidence",
+      "depends_on": ["G0-routing-contract"],
+      "platforms": ["linux", "win32"],
+      "checks": [{ "name": "provider-51", "argv": ["node", "tests/acceptance/provider-offline.mjs", "--rust-bin", "${REA_FAST_BIN}"], "expect_stdout": "\"checked\":51" }]
+    },
+    {
+      "id": "C2-provider-live",
+      "title": "Test supported external providers with success, malformed and timeout scenarios",
+      "depends_on": ["C2-provider-offline"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Need reproducible ADB/Rizin/Frida/JEB fixtures, or explicit demotion to unavailable before this gate can pass"
+    },
+    {
+      "id": "E1-upstream-semantics",
+      "title": "Prove matched upstream semantics for every claimed equivalent subsystem",
+      "depends_on": ["C1-mcp-native-routing"],
+      "platforms": ["linux"],
+      "checks": [],
+      "blocker": "Pinned JS subset passes; complete Electron Evidence, ASAR, native and mobile comparison is still missing"
+    },
+    {
+      "id": "F1-adversarial-corpus",
+      "title": "Run deterministic hostile corpus across parsers and transports",
+      "depends_on": ["S1-extraction-race", "S2-bounded-io", "S3-unix-process-tree", "S3-windows-process-tree"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Fuzz corpus, timeout, crash and memory ceilings are not yet fully encoded"
+    },
+    {
+      "id": "B1-five-workload-parity-benchmark",
+      "title": "Benchmark five fact-equivalent workloads with CPU, RSS and wall time",
+      "depends_on": ["E1-upstream-semantics"],
+      "platforms": ["linux"],
+      "checks": [],
+      "blocker": "Only the pinned JS subset comparison exists; four more comparable workloads plus process-family metrics are missing"
+    },
+    {
+      "id": "R1-independent-merge-review",
+      "title": "Independent final-head review, CI and user-controlled merge decision",
+      "depends_on": ["S1-extraction-race", "S2-bounded-io", "S3-unix-process-tree", "S3-windows-process-tree", "C1-mcp-native-routing", "C2-provider-live", "E1-upstream-semantics", "F1-adversarial-corpus", "B1-five-workload-parity-benchmark"],
+      "platforms": ["linux", "win32"],
+      "checks": [],
+      "blocker": "Independent review and explicit final authorization required; no automatic merge"
+    }
+  ]
+}

@@ -24,6 +24,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify versioned routing contract
         run: node tests/acceptance/contracts.mjs --check
+      - name: Validate atomic goal checks (no partial-pass promotion)
+        run: |
+          node quality/task-gate.mjs --validate
+          node quality/task-gate.test.mjs
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check compilation
@@ -54,6 +58,9 @@ jobs:
           extension=""
           if [[ "${{ runner.os }}" == "Windows" ]]; then extension=".exe"; fi
           node tests/acceptance/provider-offline.mjs --rust-bin "target/debug/rea-fast${extension}" --output "acceptance-artifacts/provider-offline-${{ runner.os }}.json"
+      - name: Record atomic same-commit acceptance receipts
+        shell: bash
+        run: node quality/task-gate.mjs --run --strict --output "acceptance-artifacts/task-gate-${{ runner.os }}.json"
       - name: Upload 245-tool acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -82,6 +89,30 @@ jobs:
           name: rea-fast-${{ runner.os }}-${{ runner.arch }}-${{ github.event.pull_request.head.sha || github.sha }}
           path: dist-ci/
           retention-days: 7
+          if-no-files-found: error
+
+  goal-progress:
+    name: Same-head Linux + Windows atomic goal progress
+    needs: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-Linux-${{ github.event.pull_request.head.sha || github.sha }}
+          path: receipt-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: rea-fast-245-tool-matrix-Windows-${{ github.event.pull_request.head.sha || github.sha }}
+          path: receipt-windows
+      - name: Evaluate goal against both real-platform receipts
+        run: |
+          node quality/task-gate.mjs --aggregate receipt-linux/task-gate-Linux.json receipt-windows/task-gate-Windows.json --output task-gate-aggregate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rea-fast-task-gate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: task-gate-aggregate.json
+          retention-days: 14
           if-no-files-found: error
 
   parity-benchmark:
